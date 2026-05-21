@@ -8,9 +8,9 @@
 
 ## 2. SQLite linkage smoke test
 
-- [ ] 2.1 Add SQLite as a static lib to the build, link it into the exe
-- [ ] 2.2 In `main.zig`, open an in-memory DB, run `SELECT sqlite_version()`, print result; verify FTS5 is compiled in
-- [ ] 2.3 Add sqlite-vec to the build; call `sqlite3_vec_init` from Zig; verify `vec0` virtual table can be created
+- [x] 2.1 Add SQLite as a static lib to the build, link it into the exe
+- [x] 2.2 In `main.zig`, open an in-memory DB, run `SELECT sqlite_version()`, print result; verify FTS5 is compiled in
+- [x] 2.3 Add sqlite-vec to the build; call `sqlite3_vec_init` from Zig; verify `vec0` virtual table can be created
 
 ## 3. MCP transport scaffold
 
