@@ -120,7 +120,7 @@ fn runServe(init_args: std.process.Init, cli: Cli) !void {
     var embedder = try embed_mod.Embedder.init(model);
     defer embedder.deinit();
 
-    var tools = tools_mod.Tools.init(&db, &embedder);
+    var tools = tools_mod.Tools.init(&db, &embedder, io);
     _ = arena;
 
     var stdin_buf: [4 * 1024 * 1024]u8 = undefined;

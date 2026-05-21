@@ -107,6 +107,7 @@ Options:
 | Tool | Purpose |
 |---|---|
 | `memory_add` | Insert a memory with optional slug, format, tags. |
+| `memory_load` | Read an absolute-path Markdown file and add it as a memory (`format='markdown'`; size capped at 1 MiB). |
 | `memory_get` | Fetch a memory by id or slug. Bumps `last_accessed`. |
 | `memory_update` | Partial update: any of content / format / slug / tags. Re-chunks + re-embeds on content or format change. |
 | `memory_delete` | Soft-delete; a snapshot lands in `memories_history` via trigger. |
@@ -118,7 +119,7 @@ Options:
 | `memory_status` | Aggregate counts + embedding settings + DB byte size. |
 | `list_tags` / `list_tag_values` / `list_tag_siblings` | Tag discovery. |
 
-Tool errors use the v1 string-code vocabulary (`SLUG_EXISTS`, `NOT_FOUND`, `INVALID_TARGET`, `INVALID_FORMAT`, `EMBEDDING_FAILED`, `INVALID_URL`, `MODEL_MISMATCH`) inside the standard JSON-RPC error envelope.
+Tool errors use the v1 string-code vocabulary (`SLUG_EXISTS`, `NOT_FOUND`, `INVALID_TARGET`, `INVALID_PATH`, `INVALID_FORMAT`, `EMBEDDING_FAILED`, `INVALID_URL`, `MODEL_MISMATCH`) inside the standard JSON-RPC error envelope.
 
 ## Data location
 

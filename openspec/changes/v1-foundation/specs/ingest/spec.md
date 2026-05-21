@@ -23,6 +23,42 @@ For memories with `format = 'text'`, the system SHALL create exactly one `chunks
 - **WHEN** `memory_add(content: "User prefers tea", format: "text")` is called
 - **THEN** there is exactly one new `chunks` row with `ord = 0` and `text = "User prefers tea"`
 
+### Requirement: memory_load reads a Markdown file from disk and forwards to memory_add
+
+The `memory_load(path, slug?, tags?)` operation SHALL read a Markdown file from an absolute filesystem path and add it as a memory with `format = 'markdown'`. The operation MUST NOT accept a `format` argument — `memory_load` is markdown-only by design.
+
+The implementation MUST:
+
+- Reject relative or empty paths with `INVALID_PATH` before any disk access.
+- Read the file from the supplied absolute path, capped at 1 MiB; oversized files MUST be rejected with `INVALID_PATH` and a clear message.
+- Treat a missing file as `NOT_FOUND` (the same code memory_get returns when a memory id/slug doesn't exist).
+- After a successful read, perform the same atomic insert sequence as `memory_add(content: <file>, format: 'markdown', slug, tags)`, returning the same result shape `{id, slug, format, chunks_created, tags_created}`.
+
+#### Scenario: Successful load creates a markdown memory
+
+- **WHEN** `memory_load(path: "/Users/me/notes/tea.md", slug: "tea")` is called and the file exists
+- **THEN** the response shape matches `memory_add` for that content with `format: "markdown"`; the database contains the corresponding `memories`, `chunks`, `vec_chunks`, and `fts_chunks` rows
+
+#### Scenario: Relative path rejected before disk access
+
+- **WHEN** `memory_load(path: "./tea.md")` is called
+- **THEN** the response is a JSON-RPC error with `code: 'INVALID_PATH'` and the file is never opened
+
+#### Scenario: Missing file surfaces as NOT_FOUND
+
+- **WHEN** `memory_load(path: "/Users/me/nonexistent.md")` is called and no such file exists
+- **THEN** the response is a JSON-RPC error with `code: 'NOT_FOUND'` and no rows are inserted
+
+#### Scenario: Format argument is rejected
+
+- **WHEN** `memory_load(path: "/abs/path.md", format: "text")` is called
+- **THEN** the response is a JSON-RPC error with `code: -32602` (invalid params); memory_load is markdown-only
+
+#### Scenario: Oversized file rejected
+
+- **WHEN** `memory_load(path: "/abs/huge.md")` is called and the file exceeds 1 MiB
+- **THEN** the response is a JSON-RPC error with `code: 'INVALID_PATH'` and the file is closed without being added
+
 ### Requirement: Markdown format produces N chunks via md4c-based chunker
 
 For memories with `format = 'markdown'`, the system SHALL parse the content with md4c and emit chunks according to a documented chunking policy. The resulting chunks MUST have monotonically increasing `ord` starting at `0` and concatenate (in `ord` order) to a faithful reconstruction of the document semantics.

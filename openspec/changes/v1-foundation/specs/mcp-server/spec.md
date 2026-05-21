@@ -16,12 +16,12 @@ The system SHALL read MCP JSON-RPC requests from stdin and write responses to st
 
 ### Requirement: Server exposes exactly the v1 tool surface
 
-The MCP server SHALL register the following tools at initialization: `memory_add`, `memory_update`, `memory_get`, `memory_delete`, `memory_clear`, `memory_tag`, `memory_untag`, `memory_search`, `memory_list`, `memory_status`, `list_tags`, `list_tag_values`, `list_tag_siblings`, `memory_history`.
+The MCP server SHALL register the following tools at initialization: `memory_add`, `memory_load`, `memory_update`, `memory_get`, `memory_delete`, `memory_clear`, `memory_tag`, `memory_untag`, `memory_search`, `memory_list`, `memory_status`, `list_tags`, `list_tag_values`, `list_tag_siblings`, `memory_history`.
 
 #### Scenario: Tool list response
 
 - **WHEN** a client calls the MCP `tools/list` method
-- **THEN** the response MUST include all 14 tool names above, each with a JSON Schema for its inputs
+- **THEN** the response MUST include all 15 tool names above, each with a JSON Schema for its inputs
 
 #### Scenario: Unknown tool name is rejected
 
@@ -49,7 +49,7 @@ For every tool that operates on an existing memory (`memory_update`, `memory_get
 
 ### Requirement: Standard error envelope and error codes
 
-The system SHALL return tool errors using the standard JSON-RPC error object with a stable string `code` from the v1 vocabulary: `SLUG_EXISTS`, `NOT_FOUND`, `INVALID_TARGET`, `EMBEDDING_FAILED`, `INVALID_FORMAT`, `INVALID_URL`, `MODEL_MISMATCH`. Each error MUST include a human-readable `message`.
+The system SHALL return tool errors using the standard JSON-RPC error object with a stable string `code` from the v1 vocabulary: `SLUG_EXISTS`, `NOT_FOUND`, `INVALID_TARGET`, `INVALID_PATH`, `EMBEDDING_FAILED`, `INVALID_FORMAT`, `INVALID_URL`, `MODEL_MISMATCH`. Each error MUST include a human-readable `message`.
 
 #### Scenario: Slug collision
 
@@ -80,6 +80,12 @@ memory_add(content: string,
            slug?: string,
            tags?: object)
        → { id, slug, format, chunks_created, created }
+
+memory_load(path: string,         # absolute path to a Markdown file
+            slug?: string,
+            tags?: object)
+       → { id, slug, format, chunks_created, tags_created }
+       # Markdown-only; passing `format` is a -32602 invalid-params error.
 
 memory_update(target,
               content?: string,

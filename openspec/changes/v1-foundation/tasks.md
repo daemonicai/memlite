@@ -103,3 +103,11 @@
 - [x] 14.1 Add a `zig build -Doptimize=ReleaseFast` target that strips symbols
 - [x] 14.2 Document install: drop `memlite` into `~/.local/bin/` (or `/usr/local/bin/`); first run downloads model to `~/.memlite/models/`
 - [x] 14.3 Write a brief README at the repo root with install/run/MCP-config steps
+
+## 15. memory_load — Markdown file ingest
+
+- [x] 15.1 Add `memory_load` requirement and scenarios to `specs/ingest/spec.md`; add `memory_load` to the tool list and `INVALID_PATH` to the error vocabulary in `specs/mcp-server/spec.md`
+- [x] 15.2 Implement `Tools.memoryLoad(gpa, io, path, slug, tags)` in `src/tools.zig`: validate absolute path, read file (capped at 1 MiB), delegate to existing memoryAdd path with `format='markdown'`
+- [x] 15.3 Add `memory_load` tool descriptor, dispatch, and `INVALID_PATH` AppError to `src/mcp.zig`; thread `std.Io` into `Tools` so file reads have an Io instance
+- [x] 15.4 Manual E2E test: write a real markdown file under `/tmp/`, call `memory_load` for it, verify chunks_created and that memory_get returns the file's content
+- [x] 15.5 Add `memory_load` row to the MCP tool table in `README.md`

@@ -28,6 +28,7 @@ pub const AppError = enum {
     slug_exists,
     not_found,
     invalid_target,
+    invalid_path,
     embedding_failed,
     invalid_format,
     invalid_url,
@@ -38,6 +39,7 @@ pub const AppError = enum {
             .slug_exists => "SLUG_EXISTS",
             .not_found => "NOT_FOUND",
             .invalid_target => "INVALID_TARGET",
+            .invalid_path => "INVALID_PATH",
             .embedding_failed => "EMBEDDING_FAILED",
             .invalid_format => "INVALID_FORMAT",
             .invalid_url => "INVALID_URL",
@@ -53,6 +55,7 @@ fn appErrorFor(err: ToolsError) ?AppError {
         ToolsError.SlugExists => .slug_exists,
         ToolsError.NotFound => .not_found,
         ToolsError.InvalidTarget => .invalid_target,
+        ToolsError.InvalidPath => .invalid_path,
         ToolsError.InvalidFormat => .invalid_format,
         ToolsError.EmbeddingFailed => .embedding_failed,
         ToolsError.Sqlite, ToolsError.OutOfMemory => null,
@@ -72,6 +75,13 @@ const tool_list: []const ToolDescriptor = &.{
         .description = "Add a memory. v1-foundation §8.1 — text format only; markdown lands in §9.",
         .input_schema_json =
         \\{"type":"object","properties":{"content":{"type":"string"},"format":{"type":"string","enum":["text","markdown"],"default":"text"},"slug":{"type":"string","description":"Optional logical name; must be unique across live memories."},"tags":{"type":"object","additionalProperties":{"oneOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]}}},"required":["content"]}
+        ,
+    },
+    .{
+        .name = "memory_load",
+        .description = "Read a Markdown file from an absolute filesystem path and add it as a memory (format='markdown'). Markdown-only — passing `format` is an invalid-params error. File size is capped at 1 MiB.",
+        .input_schema_json =
+        \\{"type":"object","properties":{"path":{"type":"string","description":"Absolute path to a Markdown file."},"slug":{"type":"string"},"tags":{"type":"object","additionalProperties":{"oneOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]}}},"required":["path"]}
         ,
     },
     .{
@@ -320,6 +330,8 @@ fn handleToolsCall(
 
     if (std.mem.eql(u8, tool_name, "memory_add")) {
         return callMemoryAdd(aa, out, id, args, tools);
+    } else if (std.mem.eql(u8, tool_name, "memory_load")) {
+        return callMemoryLoad(aa, out, id, args, tools);
     } else if (std.mem.eql(u8, tool_name, "memory_get")) {
         return callMemoryGet(aa, out, id, args, tools);
     } else if (std.mem.eql(u8, tool_name, "memory_delete")) {
@@ -385,6 +397,38 @@ fn callMemoryAdd(
         return finalizeToolError(out, id, err);
     };
 
+    try writeToolResult(out, id, .{ .memory_add = result });
+}
+
+fn callMemoryLoad(
+    aa: Allocator,
+    out: *Writer,
+    id: Json.Value,
+    args: ?Json.Value,
+    tools: *Tools,
+) !void {
+    const obj = (args orelse return writeError(out, id, code_invalid_params, "missing arguments")).object;
+
+    const path_v = obj.get("path") orelse return writeError(out, id, code_invalid_params, "missing path");
+    if (path_v != .string) return writeError(out, id, code_invalid_params, "path must be a string");
+
+    if (obj.get("format") != null) {
+        // memory_load is markdown-only by spec.
+        return writeError(out, id, code_invalid_params, "memory_load does not accept format (it is markdown-only)");
+    }
+
+    var load_args: tools_mod.Tools.LoadArgs = .{ .path = path_v.string };
+
+    if (obj.get("slug")) |s| switch (s) {
+        .string => |str| load_args.slug = str,
+        .null => {},
+        else => return writeError(out, id, code_invalid_params, "slug must be a string"),
+    };
+    if (obj.get("tags")) |t| {
+        load_args.tags = parseTagPairs(aa, t) catch |err| return writeError(out, id, code_invalid_params, @errorName(err));
+    }
+
+    const result = tools.memoryLoad(aa, load_args) catch |err| return finalizeToolError(out, id, err);
     try writeToolResult(out, id, .{ .memory_add = result });
 }
 

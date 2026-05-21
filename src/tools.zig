@@ -24,6 +24,7 @@ pub const Error = error{
     SlugExists,
     NotFound,
     InvalidTarget,
+    InvalidPath,
     InvalidFormat,
     EmbeddingFailed,
     Sqlite,
@@ -44,9 +45,15 @@ pub const TagPair = struct {
 pub const Tools = struct {
     db: *Db,
     embedder: *Embedder,
+    io: std.Io,
 
-    pub fn init(db: *Db, embedder: *Embedder) Tools {
-        return .{ .db = db, .embedder = embedder };
+    /// Maximum file size accepted by `memory_load`. Markdown files larger
+    /// than this are almost certainly the wrong artifact for relationship
+    /// memory; cap to prevent accidental OOM.
+    pub const MAX_LOAD_FILE_BYTES: usize = 1024 * 1024;
+
+    pub fn init(db: *Db, embedder: *Embedder, io: std.Io) Tools {
+        return .{ .db = db, .embedder = embedder, .io = io };
     }
 
     // ---- memory_add ---------------------------------------------------
@@ -102,6 +109,50 @@ pub const Tools = struct {
             .chunks_created = @intCast(chunks.len),
             .tags_created = tags_created,
         };
+    }
+
+    // ---- memory_load --------------------------------------------------
+
+    pub const LoadArgs = struct {
+        path: []const u8,
+        slug: ?[]const u8 = null,
+        tags: []const TagPair = &.{},
+    };
+
+    /// Read a markdown file from `path` and add it as a memory.
+    /// Markdown-only by design — see ingest spec, "memory_load reads a
+    /// Markdown file from disk and forwards to memory_add".
+    pub fn memoryLoad(self: *Tools, gpa: Allocator, args: LoadArgs) Error!AddResult {
+        if (args.path.len == 0 or !std.fs.path.isAbsolute(args.path)) {
+            return Error.InvalidPath;
+        }
+
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        defer arena.deinit();
+        const aa = arena.allocator();
+
+        var file = std.Io.Dir.cwd().openFile(self.io, args.path, .{}) catch |err| switch (err) {
+            error.FileNotFound => return Error.NotFound,
+            else => return Error.InvalidPath,
+        };
+        defer file.close(self.io);
+
+        var read_buf: [64 * 1024]u8 = undefined;
+        var file_reader: std.Io.File.Reader = .init(file, self.io, &read_buf);
+        const reader = &file_reader.interface;
+
+        const content = reader.allocRemaining(aa, .limited(MAX_LOAD_FILE_BYTES)) catch |err| switch (err) {
+            error.StreamTooLong => return Error.InvalidPath,
+            error.OutOfMemory => return Error.OutOfMemory,
+            else => return Error.InvalidPath,
+        };
+
+        return self.memoryAdd(gpa, .{
+            .content = content,
+            .format = "markdown",
+            .slug = args.slug,
+            .tags = args.tags,
+        });
     }
 
     // ---- memory_get ---------------------------------------------------
