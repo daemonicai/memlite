@@ -91,11 +91,11 @@
 
 ## 13. End-to-end verification
 
-- [ ] 13.1 Manual test: build the binary, run `memlite init` on a clean `~/.memlite/` — verify model downloads and DB initializes
-- [ ] 13.2 Manual test: connect Claude Desktop (or `pi-coding-agent` MCP harness) to the binary; call `memory_add` with a text and tags, then `memory_search` for it
-- [ ] 13.3 Manual test: add a markdown doc; verify multiple chunks in `chunks`; search returns the relevant chunk via `matches[]`
-- [ ] 13.4 Manual test: delete a memory, run `memory_history(slug)`, verify the deleted entry appears with `archive_reason='deleted'`
-- [ ] 13.5 Manual test: start memlite with a different `--model` URL; verify `MODEL_MISMATCH` error and clean exit
+- [x] 13.1 Manual test: build the binary, run `memlite init` on a clean `~/.memlite/` — verify model downloads and DB initializes
+- [x] 13.2 Manual test: connect Claude Desktop (or `pi-coding-agent` MCP harness) to the binary; call `memory_add` with a text and tags, then `memory_search` for it
+- [x] 13.3 Manual test: add a markdown doc; verify multiple chunks in `chunks`; search returns the relevant chunk via `matches[]`
+- [x] 13.4 Manual test: delete a memory, run `memory_history(slug)`, verify the deleted entry appears with `archive_reason='deleted'`
+- [x] 13.5 Manual test: start memlite with a different `--model` URL; verify `MODEL_MISMATCH` error and clean exit
 - [ ] 13.6 Replace the existing `sqlmem` MCP server entry in the user's MCP config with `memlite serve`; use it for one real day of relationship-memory operations
 
 ## 14. Distribution

@@ -184,7 +184,14 @@ pub const Tools = struct {
             return Error.NotFound;
         }
 
-        const history_id = c.sqlite3_last_insert_rowid(self.db.handle);
+        // sqlite3_last_insert_rowid doesn't reliably reflect trigger-driven
+        // inserts on every SQLite build, so read the new history row's id
+        // directly. memories_history.id is AUTOINCREMENT so MAX(id) for
+        // this memory_id is the row the BEFORE DELETE trigger just wrote.
+        const history_id = try self.scalarBoundI64(
+            "SELECT IFNULL(MAX(id), 0) FROM memories_history WHERE memory_id = ?;",
+            id,
+        );
         try self.exec("COMMIT;");
         return .{ .id = id, .history_id = history_id };
     }
