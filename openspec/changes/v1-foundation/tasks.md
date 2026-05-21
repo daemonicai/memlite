@@ -46,8 +46,8 @@
 
 ## 7. Embedding API
 
-- [ ] 7.1 Implement `embed(text: []const u8) ![]f32` in `src/embed.zig` — single-text embedding
-- [ ] 7.2 Surface embedding failures as `EMBEDDING_FAILED` to callers
+- [x] 7.1 Implement `embed(text: []const u8) ![]f32` in `src/embed.zig` — single-text embedding
+- [x] 7.2 Surface embedding failures as `EMBEDDING_FAILED` to callers
 
 ## 8. Lifecycle tools (no embedding yet)
 

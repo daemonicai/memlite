@@ -148,4 +148,5 @@ test {
     _ = @import("model_url.zig");
     _ = @import("download.zig");
     _ = @import("model.zig");
+    _ = @import("embed.zig");
 }

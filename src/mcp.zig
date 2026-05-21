@@ -16,11 +16,37 @@ pub const PROTOCOL_VERSION = "2025-11-25";
 pub const SERVER_NAME = "memlite";
 pub const SERVER_VERSION = "0.1.0";
 
-// JSON-RPC 2.0 standard error codes.
+// JSON-RPC 2.0 standard error codes (transport-level; integer per RFC).
 const code_parse_error = -32700;
 const code_invalid_request = -32600;
 const code_method_not_found = -32601;
 const code_invalid_params = -32602;
+
+/// v1 vocabulary of application-level error codes. The mcp-server spec
+/// pins these as STRING codes inside the standard JSON-RPC error object —
+/// non-standard, but explicitly required so callers can branch on a
+/// stable enum rather than parsing free-text messages.
+pub const AppError = enum {
+    slug_exists,
+    not_found,
+    invalid_target,
+    embedding_failed,
+    invalid_format,
+    invalid_url,
+    model_mismatch,
+
+    pub fn codeString(self: AppError) []const u8 {
+        return switch (self) {
+            .slug_exists => "SLUG_EXISTS",
+            .not_found => "NOT_FOUND",
+            .invalid_target => "INVALID_TARGET",
+            .embedding_failed => "EMBEDDING_FAILED",
+            .invalid_format => "INVALID_FORMAT",
+            .invalid_url => "INVALID_URL",
+            .model_mismatch => "MODEL_MISMATCH",
+        };
+    }
+};
 
 const Tool = struct {
     name: []const u8,
@@ -235,6 +261,27 @@ fn writeError(out: *Writer, id: Json.Value, code: i64, message: []const u8) !voi
     try s.beginObject();
     try s.objectField("code");
     try s.write(code);
+    try s.objectField("message");
+    try s.write(message);
+    try s.endObject();
+    try s.endObject();
+    try out.writeByte('\n');
+}
+
+/// Application-level error envelope: same JSON-RPC error object, but
+/// `code` is a v1-vocabulary string rather than a JSON-RPC integer.
+/// Used for SLUG_EXISTS, EMBEDDING_FAILED, etc.
+pub fn writeAppError(out: *Writer, id: Json.Value, app: AppError, message: []const u8) !void {
+    var s: Stringify = .{ .writer = out };
+    try s.beginObject();
+    try s.objectField("jsonrpc");
+    try s.write("2.0");
+    try s.objectField("id");
+    try s.write(id);
+    try s.objectField("error");
+    try s.beginObject();
+    try s.objectField("code");
+    try s.write(app.codeString());
     try s.objectField("message");
     try s.write(message);
     try s.endObject();
