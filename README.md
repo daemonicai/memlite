@@ -63,9 +63,25 @@ Both `init` and `serve` will do the same setup on first run, so `memlite serve` 
 
 ## MCP host configuration
 
-### Claude Desktop / Claude Code
+### Claude Code
 
-Add an entry to your MCP server config (`~/Library/Application Support/Claude/claude_desktop_config.json` for Claude Desktop, or `~/.claude/.mcp.json` for Claude Code):
+Register memlite via the `claude mcp` CLI. The `--scope user` flag makes the server available across every Claude Code project on your machine, which matches memlite's role as a shared per-user memory store:
+
+```sh
+claude mcp add memlite --scope user -- /Users/you/.local/bin/memlite serve
+```
+
+Verify the server is registered and reachable:
+
+```sh
+claude mcp list
+```
+
+Omit `--scope user` (or pass `--scope local`) to register memlite for the current project only.
+
+### Claude Desktop
+
+Edit `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) and add:
 
 ```json
 {
@@ -77,6 +93,8 @@ Add an entry to your MCP server config (`~/Library/Application Support/Claude/cl
   }
 }
 ```
+
+Restart Claude Desktop.
 
 ### Anything else MCP-stdio
 
