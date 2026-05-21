@@ -21,10 +21,10 @@
 
 ## 4. Schema & first-run DB init
 
-- [ ] 4.1 Implement schema creation in `src/db.zig`: `memories`, `tags`, `chunks`, `memories_history`, `settings` (per spec)
-- [ ] 4.2 Add all triggers: snapshot on `BEFORE DELETE` and `BEFORE UPDATE OF content`; FTS5 insert/delete; vec0 delete
-- [ ] 4.3 On startup, check if DB exists; if fresh, create schema with `vec_chunks` declared `FLOAT[768]` (hardcoded for now; will read from model in §6)
-- [ ] 4.4 Add settings table writes for `model_url` and `embedding_dim` on first init
+- [x] 4.1 Implement schema creation in `src/db.zig`: `memories`, `tags`, `chunks`, `memories_history`, `settings` (per spec)
+- [x] 4.2 Add all triggers: snapshot on `BEFORE DELETE` and `BEFORE UPDATE OF content`; FTS5 insert/delete; vec0 delete
+- [x] 4.3 On startup, check if DB exists; if fresh, create schema with `vec_chunks` declared `FLOAT[768]` (hardcoded for now; will read from model in §6)
+- [x] 4.4 Add settings table writes for `model_url` and `embedding_dim` on first init
 
 ## 5. llama.cpp linkage via diogok bindings
 
