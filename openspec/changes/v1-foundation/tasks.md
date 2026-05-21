@@ -100,6 +100,6 @@
 
 ## 14. Distribution
 
-- [ ] 14.1 Add a `zig build -Doptimize=ReleaseFast` target that strips symbols
-- [ ] 14.2 Document install: drop `memlite` into `~/.local/bin/` (or `/usr/local/bin/`); first run downloads model to `~/.memlite/models/`
-- [ ] 14.3 Write a brief README at the repo root with install/run/MCP-config steps
+- [x] 14.1 Add a `zig build -Doptimize=ReleaseFast` target that strips symbols
+- [x] 14.2 Document install: drop `memlite` into `~/.local/bin/` (or `/usr/local/bin/`); first run downloads model to `~/.memlite/models/`
+- [x] 14.3 Write a brief README at the repo root with install/run/MCP-config steps

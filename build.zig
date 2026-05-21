@@ -8,6 +8,11 @@ const LlamaBackend = enum(u8) { cpu, vulkan, metal };
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    // Strip symbols on Release builds — keeps the distribution binary
+    // small and makes `nm` reveal nothing useful. Debug/ReleaseSafe keep
+    // symbols for stack traces.
+    const strip_default = optimize == .ReleaseFast or optimize == .ReleaseSmall;
+    const strip = b.option(bool, "strip", "Strip symbols from the final binary") orelse strip_default;
 
     // ---- Vendored C libraries (static, linked into the final exe) ----
 
@@ -32,6 +37,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .strip = strip,
     });
     exe_mod.addIncludePath(b.path("third_party/sqlite"));
     exe_mod.addIncludePath(b.path("third_party/sqlite-vec"));

@@ -4,38 +4,125 @@ A long-term memory engine for AI agents — a shared, persistent fact store that
 
 memlite is **not** a docs or content index. It's a store for facts, preferences, events, and the small pieces of context that make an assistant feel like it knows you.
 
-## Status
-
-Pre-implementation. The v1 contract — schema, MCP tools, search behavior, embedding lifecycle — is fully specified in [`openspec/changes/v1-foundation/`](openspec/changes/v1-foundation/). Start there:
-
-- [`proposal.md`](openspec/changes/v1-foundation/proposal.md) — what v1 is and why
-- [`design.md`](openspec/changes/v1-foundation/design.md) — design decisions and rationale
-- [`specs/`](openspec/changes/v1-foundation/specs/) — capability specs (schema, mcp-server, ingest, search, embedding-engine)
-- [`tasks.md`](openspec/changes/v1-foundation/tasks.md) — implementation plan
-
 ## What it is
 
-- **One static binary.** Zig 0.16, statically linking SQLite, [sqlite-vec](https://github.com/asg017/sqlite-vec), [llama.cpp](https://github.com/ggerganov/llama.cpp) (via [diogok/llama.cpp.zig](https://github.com/diogok/llama.cpp.zig)), and [md4c](https://github.com/mity/md4c). CPU-only. No dynamic third-party dependencies.
+- **One static binary.** Zig 0.16, statically linking SQLite, [sqlite-vec](https://github.com/asg017/sqlite-vec), [llama.cpp](https://github.com/ggerganov/llama.cpp), and [md4c](https://github.com/mity/md4c). CPU-only. No dynamic third-party dependencies — `otool -L` shows only `libSystem.B.dylib` on macOS.
 - **MCP stdio, done right.** Newline-delimited JSON-RPC, per the MCP spec.
-- **Relationship-shaped data model.** Agent-supplied `slug` as logical identity (not a content hash), JSON-key/value tags in an EAV side table, soft-delete with history snapshots, unified `format` column for short text and markdown.
-- **Hybrid retrieval.** FTS5 + sqlite-vec, fused with reciprocal rank fusion, with tag pre-filtering and results grouped per memory.
+- **Relationship-shaped data model.** Agent-supplied `slug` as logical identity, JSON-key/value tags in an EAV side table, soft-delete with history snapshots, unified `format` column for short text and markdown.
+- **Hybrid retrieval.** FTS5 + sqlite-vec, fused with reciprocal rank fusion (k=60), with tag pre-filtering and results grouped per memory.
 - **Local embeddings.** GGUF models loaded via llama.cpp; pass any HuggingFace `/resolve/` URL with `--model`; first-run download cached under `~/.memlite/models/`.
 
-## CLI surface (planned)
+## Status
+
+v1-foundation is implemented end-to-end. The full v1 contract — schema, MCP tools, search behavior, embedding lifecycle — lives in [`openspec/changes/v1-foundation/`](openspec/changes/v1-foundation/):
+
+- [`proposal.md`](openspec/changes/v1-foundation/proposal.md) — what v1 is and why
+- [`design.md`](openspec/changes/v1-foundation/design.md) — decisions and rationale
+- [`specs/`](openspec/changes/v1-foundation/specs/) — five capability specs (schema, mcp-server, ingest, search, embedding-engine)
+- [`tasks.md`](openspec/changes/v1-foundation/tasks.md) — task checklist
+
+## Install
+
+Build from source (Zig 0.16 is required):
+
+```sh
+zig build -Doptimize=ReleaseFast
+```
+
+The first build pulls in llama.cpp and compiles it for CPU — expect several minutes. Subsequent builds are cached.
+
+The resulting binary at `zig-out/bin/memlite` is fully self-contained on macOS (Apple Silicon and x86_64) and Linux. Drop it where you keep your tools:
+
+```sh
+install -m 0755 zig-out/bin/memlite ~/.local/bin/memlite
+# or
+sudo install -m 0755 zig-out/bin/memlite /usr/local/bin/memlite
+```
+
+## First run
+
+```sh
+memlite init
+```
+
+This:
+
+1. Creates `~/.memlite/` if absent.
+2. Downloads the default embedding model — `nomic-embed-text-v1.5-Q5_K_M.gguf` (~99 MB) — to `~/.memlite/models/nomic-ai/nomic-embed-text-v1.5-GGUF/` if not already cached.
+3. Creates the SQLite database at `~/.memlite/memlite.db` and pins the model URL + embedding dimension into its `settings` table.
+
+After `init` completes, run the server:
+
+```sh
+memlite serve
+```
+
+It reads MCP JSON-RPC requests from stdin, writes responses to stdout, and logs to stderr.
+
+Both `init` and `serve` will do the same setup on first run, so `memlite serve` directly against a clean machine works too — `init` just makes that step explicit.
+
+## MCP host configuration
+
+### Claude Desktop / Claude Code
+
+Add an entry to your MCP server config (`~/Library/Application Support/Claude/claude_desktop_config.json` for Claude Desktop, or `~/.claude/.mcp.json` for Claude Code):
+
+```json
+{
+  "mcpServers": {
+    "memlite": {
+      "command": "/Users/you/.local/bin/memlite",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+### Anything else MCP-stdio
+
+memlite reads JSON-RPC from stdin, one request per newline-terminated line, and writes JSON-RPC responses to stdout the same way. Any MCP host that speaks plain stdio (no LSP-style `Content-Length` framing) will work.
+
+## CLI
 
 ```
-memlite serve     # default — MCP server on stdio
-memlite init      # explicit setup
-memlite dump      # read-only inspector
+memlite [serve|init|dump] [options]
 ```
 
-## MCP tools (planned)
+| Subcommand | Purpose |
+|---|---|
+| `serve` (default) | Open the DB, ensure the model, and run the MCP loop. |
+| `init`            | Same setup as `serve`, but exit immediately. Useful for separating first-run download from running the server. |
+| `dump`            | Read the DB and write all rows as NDJSON to stdout (one JSON object per line, with a `_table` discriminator). |
 
-`memory_add`, `memory_update`, `memory_get`, `memory_delete`, `memory_clear`, `memory_tag`, `memory_untag`, `memory_search`, `memory_list`, `memory_status`, `list_tags`, `list_tag_values`, `list_tag_siblings`, `memory_history`.
+Options:
+
+| Flag | Meaning |
+|---|---|
+| `--db PATH`       | Override the DB path. Precedence: `--db` > `$MEMLITE_DB` > `~/.memlite/memlite.db`. |
+| `--model URL`     | HuggingFace `/resolve/` URL for the GGUF embedding model. Pinned on first init; changing this against an existing DB raises `MODEL_MISMATCH`. |
+| `-h`, `--help`    | Show help. |
+
+## MCP tools
+
+| Tool | Purpose |
+|---|---|
+| `memory_add` | Insert a memory with optional slug, format, tags. |
+| `memory_get` | Fetch a memory by id or slug. Bumps `last_accessed`. |
+| `memory_update` | Partial update: any of content / format / slug / tags. Re-chunks + re-embeds on content or format change. |
+| `memory_delete` | Soft-delete; a snapshot lands in `memories_history` via trigger. |
+| `memory_clear` | Delete all memories; `retain_history=false` also wipes the history table. |
+| `memory_tag` / `memory_untag` | Surgical tag mutations. |
+| `memory_search` | Hybrid semantic + full-text retrieval, RRF-fused, with optional tag filter. |
+| `memory_list` | Administrative listing with `where`, `since`, `limit`, `offset`, `order_by`. Doesn't bump `last_accessed`. |
+| `memory_history` | Snapshots for a target (slug or id), most recent first. |
+| `memory_status` | Aggregate counts + embedding settings + DB byte size. |
+| `list_tags` / `list_tag_values` / `list_tag_siblings` | Tag discovery. |
+
+Tool errors use the v1 string-code vocabulary (`SLUG_EXISTS`, `NOT_FOUND`, `INVALID_TARGET`, `INVALID_FORMAT`, `EMBEDDING_FAILED`, `INVALID_URL`, `MODEL_MISMATCH`) inside the standard JSON-RPC error envelope.
 
 ## Data location
 
-`~/.memlite/` — SQLite database and downloaded GGUF models. Single-user; multi-agent via a shared namespace with `source: <agent>` attribution tags.
+`~/.memlite/` — SQLite database (`memlite.db`) and downloaded GGUF models (`models/{owner}/{repo}/{filename}`). Single-user; multi-agent via a shared namespace with `source: <agent>` attribution tags.
 
 ## License
 
