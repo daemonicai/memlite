@@ -9,6 +9,7 @@ zig-pkg/
 
 # Local Claude settings (machine-specific permissions)
 .claude/settings.local.json
+.mcp.json
 
 # Reference code kept locally for design comparison only
 reference/
