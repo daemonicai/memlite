@@ -504,22 +504,14 @@ pub const Tools = struct {
         const memories_to_return = @min(@as(usize, @intCast(limit)), ranked.items.len);
 
         // Materialize MemoryMatch list in caller's gpa so it survives the arena.
+        // memory_search is side-effect-free — no last_accessed bump here. The
+        // memory_bump tool is the explicit "I used this" signal. See
+        // openspec/changes/memory-bump-tool.
         const out_mems = try gpa.alloc(MemoryMatch, memories_to_return);
-
-        try self.exec("BEGIN IMMEDIATE;");
-        errdefer self.exec("ROLLBACK;") catch {};
 
         for (ranked.items[0..memories_to_return], 0..) |entry, out_i| {
             const meta = try self.memoryHeader(gpa, entry.memory_id);
             const tags = try self.fetchTagsJson(gpa, entry.memory_id);
-
-            // Bump last_accessed in the same transaction; read it back so
-            // the response carries the post-bump value the spec promises.
-            try self.bumpLastAccessed(entry.memory_id);
-            const new_last_accessed = try self.scalarBoundI64(
-                "SELECT last_accessed FROM memories WHERE id = ?;",
-                entry.memory_id,
-            );
 
             const chunk_copies = try gpa.alloc(ChunkMatch, entry.chunks.len);
             for (entry.chunks, 0..) |ch, i| {
@@ -542,11 +534,10 @@ pub const Tools = struct {
                 .matches = chunk_copies,
                 .created = meta.created,
                 .updated = meta.updated,
-                .last_accessed = new_last_accessed,
+                .last_accessed = meta.last_accessed,
             };
         }
 
-        try self.exec("COMMIT;");
         return .{ .memories = out_mems };
     }
 
@@ -911,6 +902,22 @@ pub const Tools = struct {
         return .{ .id = id, .removed_count = c.sqlite3_changes(self.db.handle) };
     }
 
+    pub const BumpResult = struct { id: i64, last_accessed: i64 };
+
+    /// Update `last_accessed = unixepoch()` for the targeted live memory.
+    /// Returns the resolved id and the new timestamp. See
+    /// openspec/changes/memory-bump-tool — this is the explicit engagement
+    /// signal that replaces v1's auto-bump-on-memory_search behavior.
+    pub fn memoryBump(self: *Tools, target: Target) Error!BumpResult {
+        const id = try self.resolveTarget(target);
+        try self.bumpLastAccessed(id);
+        const new_last_accessed = try self.scalarBoundI64(
+            "SELECT last_accessed FROM memories WHERE id = ?;",
+            id,
+        );
+        return .{ .id = id, .last_accessed = new_last_accessed };
+    }
+
     // =====================================================================
     // Private helpers
     // =====================================================================
@@ -1051,6 +1058,7 @@ pub const Tools = struct {
         content: []const u8,
         created: i64,
         updated: i64,
+        last_accessed: i64,
     };
 
     fn vecSearch(
@@ -1211,7 +1219,7 @@ pub const Tools = struct {
     }
 
     fn memoryHeader(self: *Tools, gpa: Allocator, id: i64) Error!MemoryHeader {
-        const sql = "SELECT slug, format, content, created, updated FROM memories WHERE id = ?;";
+        const sql = "SELECT slug, format, content, created, updated, last_accessed FROM memories WHERE id = ?;";
         var stmt: ?*c.sqlite3_stmt = null;
         try sqliteOk(c.sqlite3_prepare_v2(self.db.handle, sql, -1, &stmt, null));
         defer _ = c.sqlite3_finalize(stmt);
@@ -1227,6 +1235,7 @@ pub const Tools = struct {
             .content = try gpa.dupe(u8, std.mem.span(c.sqlite3_column_text(stmt, 2).?)),
             .created = c.sqlite3_column_int64(stmt, 3),
             .updated = c.sqlite3_column_int64(stmt, 4),
+            .last_accessed = c.sqlite3_column_int64(stmt, 5),
         };
     }
 
@@ -1400,4 +1409,108 @@ fn splitContent(arena: Allocator, format: []const u8, content: []const u8) Error
     const one = try arena.alloc([]const u8, 1);
     one[0] = content;
     return one;
+}
+
+// ---- Tests ----
+//
+// memory_bump and memory_search behavior introduced by
+// openspec/changes/memory-bump-tool: bump updates last_accessed, search
+// no longer does. The two bump tests run on every `zig build test`. The
+// search test needs an embedder (to embed the query) and is gated on
+// $MEMLITE_TEST_MODEL.
+
+const testing = std.testing;
+const model_mod = @import("model.zig");
+
+fn fetchLastAccessed(db: *Db, id: i64) !i64 {
+    var stmt: ?*c.sqlite3_stmt = null;
+    if (c.sqlite3_prepare_v2(
+        db.handle,
+        "SELECT last_accessed FROM memories WHERE id = ?;",
+        -1,
+        &stmt,
+        null,
+    ) != c.SQLITE_OK) return error.SqlitePrepareFailed;
+    defer _ = c.sqlite3_finalize(stmt);
+    _ = c.sqlite3_bind_int64(stmt, 1, id);
+    if (c.sqlite3_step(stmt) != c.SQLITE_ROW) return error.NoRow;
+    return c.sqlite3_column_int64(stmt, 0);
+}
+
+test "memory_bump updates last_accessed and returns the new value" {
+    var db = try Db.open(":memory:");
+    defer db.close();
+    try db.initSchema(testing.allocator, 4, "test://model");
+
+    var tools: Tools = .{ .db = &db, .embedder = undefined, .io = undefined };
+
+    try tools.exec(
+        \\INSERT INTO memories(slug, format, content, created, updated, last_accessed)
+        \\VALUES ('x', 'text', 'hello', 1000, 1000, 1000);
+    );
+
+    const before = try fetchLastAccessed(&db, 1);
+    try testing.expectEqual(@as(i64, 1000), before);
+
+    const result = try tools.memoryBump(.{ .slug = "x" });
+    try testing.expectEqual(@as(i64, 1), result.id);
+    try testing.expect(result.last_accessed > 1000);
+    try testing.expectEqual(result.last_accessed, try fetchLastAccessed(&db, 1));
+
+    // Bump-by-id also resolves and updates.
+    const second = try tools.memoryBump(.{ .id = 1 });
+    try testing.expectEqual(@as(i64, 1), second.id);
+    try testing.expect(second.last_accessed >= result.last_accessed);
+}
+
+test "memory_bump on a non-existent target returns NotFound" {
+    var db = try Db.open(":memory:");
+    defer db.close();
+    try db.initSchema(testing.allocator, 4, "test://model");
+
+    var tools: Tools = .{ .db = &db, .embedder = undefined, .io = undefined };
+
+    try testing.expectError(Error.NotFound, tools.memoryBump(.{ .slug = "nope" }));
+    try testing.expectError(Error.NotFound, tools.memoryBump(.{ .id = 42 }));
+}
+
+fn testModelPath() ?[:0]const u8 {
+    const env = std.c.getenv("MEMLITE_TEST_MODEL") orelse return null;
+    return std.mem.span(env);
+}
+
+test "memory_search leaves last_accessed unchanged" {
+    const path = testModelPath() orelse return error.SkipZigTest;
+
+    model_mod.initBackend();
+    defer model_mod.deinitBackend();
+    var model = try model_mod.Model.loadFromFile(path, .{ .quiet = true });
+    defer model.deinit();
+    var embedder = try Embedder.init(model);
+    defer embedder.deinit();
+
+    var db = try Db.open(":memory:");
+    defer db.close();
+    try db.initSchema(testing.allocator, embedder.dim, "test://model");
+
+    var tools: Tools = .{ .db = &db, .embedder = &embedder, .io = undefined };
+
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    _ = try tools.memoryAdd(aa, .{
+        .content = "the user takes their coffee black",
+        .slug = "coffee-pref",
+    });
+
+    // Pin last_accessed to a deliberately-old value so any bump would be
+    // unambiguously visible (unixepoch() is many orders of magnitude larger
+    // than 1, so a same-second bump still shows as a jump).
+    try tools.exec("UPDATE memories SET last_accessed = 1 WHERE id = 1;");
+    try testing.expectEqual(@as(i64, 1), try fetchLastAccessed(&db, 1));
+
+    _ = try tools.memorySearch(aa, .{ .query = "coffee" });
+
+    try testing.expectEqual(@as(i64, 1), try fetchLastAccessed(&db, 1));
 }

@@ -165,9 +165,16 @@ const tool_list: []const ToolDescriptor = &.{
     },
     .{
         .name = "memory_search",
-        .description = "Hybrid semantic + full-text search. Embeds the query, retrieves chunks from vec0 + fts5, merges via RRF (k=60), groups by memory.",
+        .description = "Hybrid semantic + full-text search. Embeds the query, retrieves chunks from vec0 + fts5, merges via RRF (k=60), groups by memory. Side-effect-free: does NOT bump last_accessed. Use memory_bump to record engagement.",
         .input_schema_json =
         \\{"type":"object","properties":{"query":{"type":"string"},"where":{"type":"object","description":"Tag filter: {key: string | [string,...]} — keys are AND-combined; values within a key are OR.","additionalProperties":{"oneOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]}},"limit":{"type":"integer","default":10},"oversample":{"type":"integer","default":3}},"required":["query"]}
+        ,
+    },
+    .{
+        .name = "memory_bump",
+        .description = "Update last_accessed for one live memory to record deliberate engagement (e.g. after using a memory_search result in a reply). memory_get auto-bumps; memory_search does not — call memory_bump explicitly when you've leaned on a search hit.",
+        .input_schema_json =
+        \\{"type":"object","properties":{"target":{"oneOf":[{"type":"integer"},{"type":"string"}]}},"required":["target"]}
         ,
     },
     .{
@@ -354,6 +361,8 @@ fn handleToolsCall(
         return callMemoryUntag(aa, out, id, args, tools);
     } else if (std.mem.eql(u8, tool_name, "memory_search")) {
         return callMemorySearch(aa, out, id, args, tools);
+    } else if (std.mem.eql(u8, tool_name, "memory_bump")) {
+        return callMemoryBump(aa, out, id, args, tools);
     } else if (std.mem.eql(u8, tool_name, "memory_list")) {
         return callMemoryList(aa, out, id, args, tools);
     } else if (std.mem.eql(u8, tool_name, "list_tags")) {
@@ -567,6 +576,22 @@ fn callMemoryUntag(
     try writeToolResult(out, id, .{ .memory_untag = result });
 }
 
+fn callMemoryBump(
+    aa: Allocator,
+    out: *Writer,
+    id: Json.Value,
+    args: ?Json.Value,
+    tools: *Tools,
+) !void {
+    _ = aa;
+    const obj = (args orelse return writeError(out, id, code_invalid_params, "missing arguments")).object;
+    const target = parseTarget(obj.get("target")) catch |e| {
+        return writeAppError(out, id, .invalid_target, @errorName(e));
+    };
+    const result = tools.memoryBump(target) catch |err| return finalizeToolError(out, id, err);
+    try writeToolResult(out, id, .{ .memory_bump = result });
+}
+
 fn callMemorySearch(
     aa: Allocator,
     out: *Writer,
@@ -729,6 +754,7 @@ const ToolResult = union(enum) {
     memory_tag: tools_mod.Tools.TagResult,
     memory_untag: tools_mod.Tools.UntagResult,
     memory_search: tools_mod.Tools.SearchResult,
+    memory_bump: tools_mod.Tools.BumpResult,
     memory_list: tools_mod.Tools.ListResult,
     list_tags: []const tools_mod.Tools.KeyCount,
     list_tag_values: []const tools_mod.Tools.ValueCount,
@@ -854,6 +880,14 @@ fn emitResultPayload(s: *Stringify, result: ToolResult) !void {
             try s.write(r.id);
             try s.objectField("removed_count");
             try s.write(r.removed_count);
+            try s.endObject();
+        },
+        .memory_bump => |r| {
+            try s.beginObject();
+            try s.objectField("id");
+            try s.write(r.id);
+            try s.objectField("last_accessed");
+            try s.write(r.last_accessed);
             try s.endObject();
         },
         .memory_list => |r| {

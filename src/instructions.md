@@ -13,9 +13,16 @@ Before adding, call `memory_search` to avoid duplicates. If a close match exists
 
 ## Reading
 
-- `memory_search` — hybrid semantic + full-text retrieval, optionally tag-filtered. Use for content recall ("what does the user prefer for X?").
+- `memory_search` — hybrid semantic + full-text retrieval, optionally tag-filtered. Use for content recall ("what does the user prefer for X?"). **Side-effect-free**: does NOT bump `last_accessed`. If you actually use a hit in your reply, call `memory_bump(target)` to record it (see below).
 - `memory_list` — administrative browse. Filter by tags (`where`) and `since`, order by `created` | `updated` | `last_accessed`, with `limit` and `offset`. Use for "the N most recently updated memories", "everything tagged `kind=event` in the last week", etc. Does NOT bump `last_accessed`.
-- `memory_get` — fetch one memory by id or slug. DOES bump `last_accessed`.
+- `memory_get` — fetch one memory by id or slug. DOES bump `last_accessed` automatically (deliberate fetch is treated as engagement).
 - `list_tags`, `list_tag_values`, `list_tag_siblings` — discover the existing tag vocabulary before inventing new keys or values. Prefer reusing established tags.
 - `memory_history` — snapshots from prior versions and soft-deletes; the user can recover or audit here.
 - `memory_status` — aggregate counts, embedding model + dimension, on-disk DB size. Use for sanity checks.
+
+## Recording intent
+
+`last_accessed` is meant to track *engagement* — memories you actually leaned on, not memories you brushed past while exploring. Two tools update it:
+
+- `memory_get` — auto-bumps. Any deliberate fetch by id or slug counts as engagement.
+- `memory_bump(target)` — the explicit signal. Call it after using a `memory_search` result in a reply. Bump only the memories you actually relied on; do not bump every hit. Skipping `memory_bump` is fine if a search result didn't end up shaping your response.
