@@ -96,7 +96,7 @@
 - [x] 13.3 Manual test: add a markdown doc; verify multiple chunks in `chunks`; search returns the relevant chunk via `matches[]`
 - [x] 13.4 Manual test: delete a memory, run `memory_history(slug)`, verify the deleted entry appears with `archive_reason='deleted'`
 - [x] 13.5 Manual test: start memlite with a different `--model` URL; verify `MODEL_MISMATCH` error and clean exit
-- [ ] 13.6 Replace the existing `sqlmem` MCP server entry in the user's MCP config with `memlite serve`; use it for one real day of relationship-memory operations
+- [x] 13.6 Replace the existing `sqlmem` MCP server entry in the user's MCP config with `memlite serve`; use it for one real day of relationship-memory operations
 
 ## 14. Distribution
 
