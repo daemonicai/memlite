@@ -14,10 +14,10 @@
 
 ## 3. MCP transport scaffold
 
-- [ ] 3.1 Implement a stdio JSON-RPC read/write loop in `src/mcp.zig` — newline-delimited UTF-8 on stdin/stdout
-- [ ] 3.2 Implement `tools/list` returning a static array with one placeholder tool (`echo`)
-- [ ] 3.3 Implement `tools/call` dispatch with `-32601` for unknown tools
-- [ ] 3.4 Verify against `claude` MCP host (or `npx @modelcontextprotocol/inspector`) that the server lists `echo` and handles a call
+- [x] 3.1 Implement a stdio JSON-RPC read/write loop in `src/mcp.zig` — newline-delimited UTF-8 on stdin/stdout
+- [x] 3.2 Implement `tools/list` returning a static array with one placeholder tool (`echo`)
+- [x] 3.3 Implement `tools/call` dispatch with `-32601` for unknown tools
+- [x] 3.4 Verify against `claude` MCP host (or `npx @modelcontextprotocol/inspector`) that the server lists `echo` and handles a call
 
 ## 4. Schema & first-run DB init
 
