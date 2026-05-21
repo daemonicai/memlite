@@ -20,12 +20,15 @@ memlite is **not** a docs or content index. It's a store for facts, preferences,
 
 ## Status
 
-v1-foundation is implemented end-to-end. The full v1 contract — schema, MCP tools, search behavior, embedding lifecycle — lives in [`openspec/changes/v1-foundation/`](openspec/changes/v1-foundation/):
+v1 is implemented end-to-end and shipped as `v0.1.0`. The canonical contract — every normative requirement and scenario for schema, MCP tools, search behavior, embedding lifecycle, and ingest — lives in [`openspec/specs/`](openspec/specs/):
 
-- [`proposal.md`](openspec/changes/v1-foundation/proposal.md) — what v1 is and why
-- [`design.md`](openspec/changes/v1-foundation/design.md) — decisions and rationale
-- [`specs/`](openspec/changes/v1-foundation/specs/) — five capability specs (schema, mcp-server, ingest, search, embedding-engine)
-- [`tasks.md`](openspec/changes/v1-foundation/tasks.md) — task checklist
+- [`schema/spec.md`](openspec/specs/schema/spec.md) — tables, triggers, history semantics
+- [`mcp-server/spec.md`](openspec/specs/mcp-server/spec.md) — transport, tool surface, handshake instructions, error vocabulary
+- [`ingest/spec.md`](openspec/specs/ingest/spec.md) — markdown chunking and tag normalisation
+- [`search/spec.md`](openspec/specs/search/spec.md) — hybrid vec0 + FTS5 retrieval, RRF fusion, tag filtering
+- [`embedding-engine/spec.md`](openspec/specs/embedding-engine/spec.md) — GGUF model lifecycle, download cadence, quiet-by-default loader
+
+Original proposals + design notes + task checklists for each change (`v1-foundation` and five follow-ups: `quiet-llama-logs`, `download-progress`, `mcp-handshake-instructions`, `object-shaped-tool-results`, `memory-bump-tool`) are preserved under [`openspec/changes/archive/`](openspec/changes/archive/).
 
 ## Install
 
