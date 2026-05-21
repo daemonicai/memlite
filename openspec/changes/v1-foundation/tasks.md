@@ -1,10 +1,10 @@
 ## 1. Project skeleton
 
-- [ ] 1.1 `zig init` an executable project at the repo root; commit `build.zig`, `build.zig.zon`, `src/main.zig`
-- [ ] 1.2 Add `.gitignore` for `zig-cache/`, `zig-out/`, `~/.memlite` artifacts
-- [ ] 1.3 Pin Zig 0.16 in `build.zig.zon` (`minimum_zig_version`)
-- [ ] 1.4 Create `third_party/` directory and vendor SQLite amalgamation (`sqlite3.c`, `sqlite3.h`), sqlite-vec (`sqlite-vec.c`, `sqlite-vec.h`), and md4c
-- [ ] 1.5 Add a `b.addStaticLibrary` for each vendored C lib with the required defines (`SQLITE_THREADSAFE=1`, `SQLITE_ENABLE_FTS5`, `SQLITE_ENABLE_JSON1`)
+- [x] 1.1 `zig init` an executable project at the repo root; commit `build.zig`, `build.zig.zon`, `src/main.zig`
+- [x] 1.2 Add `.gitignore` for `zig-cache/`, `zig-out/`, `~/.memlite` artifacts
+- [x] 1.3 Pin Zig 0.16 in `build.zig.zon` (`minimum_zig_version`)
+- [x] 1.4 Create `third_party/` directory and vendor SQLite amalgamation (`sqlite3.c`, `sqlite3.h`), sqlite-vec (`sqlite-vec.c`, `sqlite-vec.h`), and md4c
+- [x] 1.5 Add a `b.addStaticLibrary` for each vendored C lib with the required defines (`SQLITE_THREADSAFE=1`, `SQLITE_ENABLE_FTS5`, `SQLITE_ENABLE_JSON1`)
 
 ## 2. SQLite linkage smoke test
 

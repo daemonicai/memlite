@@ -11,3 +11,13 @@ zig-out/
 
 # Reference code kept locally for design comparison only
 reference/
+
+# Local memlite runtime artifacts (DB and downloaded models).
+# The default lives at ~/.memlite/ outside the repo, but devs may point
+# --db / --model at in-repo paths while testing.
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+models/
+.memlite/
