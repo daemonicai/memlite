@@ -886,6 +886,8 @@ fn emitResultPayload(s: *Stringify, result: ToolResult) !void {
             try s.endObject();
         },
         .list_tags => |r| {
+            try s.beginObject();
+            try s.objectField("tags");
             try s.beginArray();
             for (r) |kc| {
                 try s.beginObject();
@@ -896,8 +898,11 @@ fn emitResultPayload(s: *Stringify, result: ToolResult) !void {
                 try s.endObject();
             }
             try s.endArray();
+            try s.endObject();
         },
         .list_tag_values => |r| {
+            try s.beginObject();
+            try s.objectField("values");
             try s.beginArray();
             for (r) |vc| {
                 try s.beginObject();
@@ -908,8 +913,11 @@ fn emitResultPayload(s: *Stringify, result: ToolResult) !void {
                 try s.endObject();
             }
             try s.endArray();
+            try s.endObject();
         },
         .list_tag_siblings => |r| {
+            try s.beginObject();
+            try s.objectField("siblings");
             try s.beginArray();
             for (r) |sib| {
                 try s.beginObject();
@@ -922,8 +930,11 @@ fn emitResultPayload(s: *Stringify, result: ToolResult) !void {
                 try s.endObject();
             }
             try s.endArray();
+            try s.endObject();
         },
         .memory_history => |r| {
+            try s.beginObject();
+            try s.objectField("history");
             try s.beginArray();
             for (r) |h| {
                 try s.beginObject();
@@ -954,6 +965,7 @@ fn emitResultPayload(s: *Stringify, result: ToolResult) !void {
                 try s.endObject();
             }
             try s.endArray();
+            try s.endObject();
         },
         .memory_status => |r| {
             try s.beginObject();
