@@ -110,6 +110,44 @@ const tool_list: []const ToolDescriptor = &.{
         ,
     },
     .{
+        .name = "memory_list",
+        .description = "Administrative read. Returns memories filtered by tags / since, ordered by created|updated|last_accessed (default updated). Does NOT bump last_accessed.",
+        .input_schema_json =
+        \\{"type":"object","properties":{"where":{"type":"object","additionalProperties":{"oneOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]}},"since":{"type":"integer","description":"Unix epoch; only memories with order_by column >= since are returned."},"limit":{"type":"integer","default":50},"offset":{"type":"integer","default":0},"order_by":{"type":"string","enum":["created","updated","last_accessed"],"default":"updated"}}}
+        ,
+    },
+    .{
+        .name = "list_tags",
+        .description = "All distinct tag keys with the count of distinct memories carrying each key, sorted by memory_count desc.",
+        .input_schema_json = "{\"type\":\"object\"}",
+    },
+    .{
+        .name = "list_tag_values",
+        .description = "All distinct values for a tag key, with the count of distinct memories carrying each value.",
+        .input_schema_json =
+        \\{"type":"object","properties":{"key":{"type":"string"}},"required":["key"]}
+        ,
+    },
+    .{
+        .name = "list_tag_siblings",
+        .description = "Tags that co-occur on memories carrying the (key, value) pair, excluding the input pair only.",
+        .input_schema_json =
+        \\{"type":"object","properties":{"key":{"type":"string"},"value":{"type":"string"}},"required":["key","value"]}
+        ,
+    },
+    .{
+        .name = "memory_history",
+        .description = "Snapshots from memories_history matching the target (slug or memory_id), most-recent-first.",
+        .input_schema_json =
+        \\{"type":"object","properties":{"target":{"oneOf":[{"type":"integer"},{"type":"string"}]}},"required":["target"]}
+        ,
+    },
+    .{
+        .name = "memory_status",
+        .description = "Aggregate counts (memories, chunks, tags, history), embedding model + dim, and on-disk DB size.",
+        .input_schema_json = "{\"type\":\"object\"}",
+    },
+    .{
         .name = "memory_search",
         .description = "Hybrid semantic + full-text search. Embeds the query, retrieves chunks from vec0 + fts5, merges via RRF (k=60), groups by memory.",
         .input_schema_json =
@@ -296,6 +334,18 @@ fn handleToolsCall(
         return callMemoryUntag(aa, out, id, args, tools);
     } else if (std.mem.eql(u8, tool_name, "memory_search")) {
         return callMemorySearch(aa, out, id, args, tools);
+    } else if (std.mem.eql(u8, tool_name, "memory_list")) {
+        return callMemoryList(aa, out, id, args, tools);
+    } else if (std.mem.eql(u8, tool_name, "list_tags")) {
+        return callListTags(aa, out, id, tools);
+    } else if (std.mem.eql(u8, tool_name, "list_tag_values")) {
+        return callListTagValues(aa, out, id, args, tools);
+    } else if (std.mem.eql(u8, tool_name, "list_tag_siblings")) {
+        return callListTagSiblings(aa, out, id, args, tools);
+    } else if (std.mem.eql(u8, tool_name, "memory_history")) {
+        return callMemoryHistory(aa, out, id, args, tools);
+    } else if (std.mem.eql(u8, tool_name, "memory_status")) {
+        return callMemoryStatus(aa, out, id, tools);
     }
     return writeError(out, id, code_method_not_found, tool_name);
 }
@@ -495,6 +545,99 @@ fn callMemorySearch(
     try writeToolResult(out, id, .{ .memory_search = result });
 }
 
+fn callMemoryList(
+    aa: Allocator,
+    out: *Writer,
+    id: Json.Value,
+    args: ?Json.Value,
+    tools: *Tools,
+) !void {
+    var la: tools_mod.Tools.ListArgs = .{};
+    if (args) |a| if (a == .object) {
+        const obj = a.object;
+        if (obj.get("limit")) |v| switch (v) {
+            .integer => |n| la.limit = if (n <= 0) 50 else @intCast(n),
+            else => return writeError(out, id, code_invalid_params, "limit must be integer"),
+        };
+        if (obj.get("offset")) |v| switch (v) {
+            .integer => |n| la.offset = if (n < 0) 0 else @intCast(n),
+            else => return writeError(out, id, code_invalid_params, "offset must be integer"),
+        };
+        if (obj.get("since")) |v| switch (v) {
+            .integer => |n| la.since = n,
+            else => return writeError(out, id, code_invalid_params, "since must be integer"),
+        };
+        if (obj.get("order_by")) |v| switch (v) {
+            .string => |s| {
+                if (std.mem.eql(u8, s, "created")) la.order_by = .created
+                else if (std.mem.eql(u8, s, "updated")) la.order_by = .updated
+                else if (std.mem.eql(u8, s, "last_accessed")) la.order_by = .last_accessed
+                else return writeError(out, id, code_invalid_params, "order_by must be created|updated|last_accessed");
+            },
+            else => return writeError(out, id, code_invalid_params, "order_by must be string"),
+        };
+        if (obj.get("where")) |w| {
+            la.where = parseTagFilters(aa, w) catch |err| return writeError(out, id, code_invalid_params, @errorName(err));
+        }
+    };
+    const result = tools.memoryList(aa, la) catch |err| return finalizeToolError(out, id, err);
+    try writeToolResult(out, id, .{ .memory_list = result });
+}
+
+fn callListTags(aa: Allocator, out: *Writer, id: Json.Value, tools: *Tools) !void {
+    const result = tools.listTags(aa) catch |err| return finalizeToolError(out, id, err);
+    try writeToolResult(out, id, .{ .list_tags = result });
+}
+
+fn callListTagValues(
+    aa: Allocator,
+    out: *Writer,
+    id: Json.Value,
+    args: ?Json.Value,
+    tools: *Tools,
+) !void {
+    const obj = (args orelse return writeError(out, id, code_invalid_params, "missing arguments")).object;
+    const key_v = obj.get("key") orelse return writeError(out, id, code_invalid_params, "missing key");
+    if (key_v != .string) return writeError(out, id, code_invalid_params, "key must be a string");
+    const result = tools.listTagValues(aa, key_v.string) catch |err| return finalizeToolError(out, id, err);
+    try writeToolResult(out, id, .{ .list_tag_values = result });
+}
+
+fn callListTagSiblings(
+    aa: Allocator,
+    out: *Writer,
+    id: Json.Value,
+    args: ?Json.Value,
+    tools: *Tools,
+) !void {
+    const obj = (args orelse return writeError(out, id, code_invalid_params, "missing arguments")).object;
+    const key_v = obj.get("key") orelse return writeError(out, id, code_invalid_params, "missing key");
+    const val_v = obj.get("value") orelse return writeError(out, id, code_invalid_params, "missing value");
+    if (key_v != .string or val_v != .string) return writeError(out, id, code_invalid_params, "key and value must be strings");
+    const result = tools.listTagSiblings(aa, key_v.string, val_v.string) catch |err| return finalizeToolError(out, id, err);
+    try writeToolResult(out, id, .{ .list_tag_siblings = result });
+}
+
+fn callMemoryHistory(
+    aa: Allocator,
+    out: *Writer,
+    id: Json.Value,
+    args: ?Json.Value,
+    tools: *Tools,
+) !void {
+    const obj = (args orelse return writeError(out, id, code_invalid_params, "missing arguments")).object;
+    const target = parseTarget(obj.get("target")) catch |e| {
+        return writeAppError(out, id, .invalid_target, @errorName(e));
+    };
+    const result = tools.memoryHistory(aa, target) catch |err| return finalizeToolError(out, id, err);
+    try writeToolResult(out, id, .{ .memory_history = result });
+}
+
+fn callMemoryStatus(aa: Allocator, out: *Writer, id: Json.Value, tools: *Tools) !void {
+    const result = tools.memoryStatus(aa) catch |err| return finalizeToolError(out, id, err);
+    try writeToolResult(out, id, .{ .memory_status = result });
+}
+
 fn parseTagFilters(aa: Allocator, v: Json.Value) ![]const tools_mod.Tools.TagFilter {
     if (v != .object) return error.WhereMustBeObject;
     var list: std.ArrayList(tools_mod.Tools.TagFilter) = .empty;
@@ -534,6 +677,12 @@ const ToolResult = union(enum) {
     memory_tag: tools_mod.Tools.TagResult,
     memory_untag: tools_mod.Tools.UntagResult,
     memory_search: tools_mod.Tools.SearchResult,
+    memory_list: tools_mod.Tools.ListResult,
+    list_tags: []const tools_mod.Tools.KeyCount,
+    list_tag_values: []const tools_mod.Tools.ValueCount,
+    list_tag_siblings: []const tools_mod.Tools.Sibling,
+    memory_history: []const tools_mod.Tools.HistoryEntry,
+    memory_status: tools_mod.Tools.Status,
 };
 
 fn writeToolResult(out: *Writer, id: Json.Value, result: ToolResult) !void {
@@ -653,6 +802,130 @@ fn emitResultPayload(s: *Stringify, result: ToolResult) !void {
             try s.write(r.id);
             try s.objectField("removed_count");
             try s.write(r.removed_count);
+            try s.endObject();
+        },
+        .memory_list => |r| {
+            try s.beginObject();
+            try s.objectField("memories");
+            try s.beginArray();
+            for (r.memories) |m| {
+                try s.beginObject();
+                try s.objectField("id");
+                try s.write(m.id);
+                try s.objectField("slug");
+                if (m.slug) |slug| try s.write(slug) else try s.write(null);
+                try s.objectField("format");
+                try s.write(m.format);
+                try s.objectField("content");
+                try s.write(m.content);
+                try s.objectField("tags");
+                try s.beginWriteRaw();
+                try s.writer.writeAll(m.tags_json);
+                s.endWriteRaw();
+                try s.objectField("created");
+                try s.write(m.created);
+                try s.objectField("updated");
+                try s.write(m.updated);
+                try s.objectField("last_accessed");
+                try s.write(m.last_accessed);
+                try s.endObject();
+            }
+            try s.endArray();
+            try s.endObject();
+        },
+        .list_tags => |r| {
+            try s.beginArray();
+            for (r) |kc| {
+                try s.beginObject();
+                try s.objectField("key");
+                try s.write(kc.key);
+                try s.objectField("memory_count");
+                try s.write(kc.memory_count);
+                try s.endObject();
+            }
+            try s.endArray();
+        },
+        .list_tag_values => |r| {
+            try s.beginArray();
+            for (r) |vc| {
+                try s.beginObject();
+                try s.objectField("value");
+                try s.write(vc.value);
+                try s.objectField("memory_count");
+                try s.write(vc.memory_count);
+                try s.endObject();
+            }
+            try s.endArray();
+        },
+        .list_tag_siblings => |r| {
+            try s.beginArray();
+            for (r) |sib| {
+                try s.beginObject();
+                try s.objectField("key");
+                try s.write(sib.key);
+                try s.objectField("value");
+                try s.write(sib.value);
+                try s.objectField("co_occurrence_count");
+                try s.write(sib.co_occurrence_count);
+                try s.endObject();
+            }
+            try s.endArray();
+        },
+        .memory_history => |r| {
+            try s.beginArray();
+            for (r) |h| {
+                try s.beginObject();
+                try s.objectField("history_id");
+                try s.write(h.id);
+                try s.objectField("memory_id");
+                try s.write(h.memory_id);
+                try s.objectField("slug");
+                if (h.slug) |slug| try s.write(slug) else try s.write(null);
+                try s.objectField("format");
+                try s.write(h.format);
+                try s.objectField("content");
+                try s.write(h.content);
+                try s.objectField("tags_snapshot");
+                try s.beginWriteRaw();
+                try s.writer.writeAll(h.tags_snapshot);
+                s.endWriteRaw();
+                try s.objectField("created");
+                try s.write(h.created);
+                try s.objectField("updated");
+                try s.write(h.updated);
+                try s.objectField("last_accessed");
+                try s.write(h.last_accessed);
+                try s.objectField("archived_at");
+                try s.write(h.archived_at);
+                try s.objectField("archive_reason");
+                try s.write(h.archive_reason);
+                try s.endObject();
+            }
+            try s.endArray();
+        },
+        .memory_status => |r| {
+            try s.beginObject();
+            try s.objectField("total_memories");
+            try s.write(r.total_memories);
+            try s.objectField("total_chunks");
+            try s.write(r.total_chunks);
+            try s.objectField("total_tags");
+            try s.write(r.total_tags);
+            try s.objectField("history_entries");
+            try s.write(r.history_entries);
+            try s.objectField("embedding_model");
+            try s.write(r.embedding_model);
+            try s.objectField("embedding_dim");
+            try s.write(r.embedding_dim);
+            try s.objectField("database_size_bytes");
+            try s.write(r.database_size_bytes);
+            try s.objectField("by_format");
+            try s.beginObject();
+            try s.objectField("text");
+            try s.write(r.text_count);
+            try s.objectField("markdown");
+            try s.write(r.markdown_count);
+            try s.endObject();
             try s.endObject();
         },
         .memory_search => |r| {

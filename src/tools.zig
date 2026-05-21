@@ -492,6 +492,318 @@ pub const Tools = struct {
         return .{ .memories = out_mems };
     }
 
+    // ---- memory_list -------------------------------------------------
+
+    pub const OrderBy = enum {
+        created,
+        updated,
+        last_accessed,
+
+        pub fn column(self: OrderBy) []const u8 {
+            return switch (self) {
+                .created => "created",
+                .updated => "updated",
+                .last_accessed => "last_accessed",
+            };
+        }
+    };
+
+    pub const ListArgs = struct {
+        where: []const TagFilter = &.{},
+        since: ?i64 = null,
+        limit: u32 = 50,
+        offset: u32 = 0,
+        order_by: OrderBy = .updated,
+    };
+
+    pub const ListEntry = struct {
+        id: i64,
+        slug: ?[]const u8,
+        format: []const u8,
+        content: []const u8,
+        tags_json: []const u8,
+        created: i64,
+        updated: i64,
+        last_accessed: i64,
+    };
+
+    pub const ListResult = struct {
+        memories: []const ListEntry,
+    };
+
+    pub fn memoryList(self: *Tools, gpa: Allocator, args: ListArgs) Error!ListResult {
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        defer arena.deinit();
+        const aa = arena.allocator();
+
+        var sql_buf: std.ArrayList(u8) = .empty;
+        try sql_buf.appendSlice(aa,
+            "SELECT id, slug, format, content, created, updated, last_accessed FROM memories m",
+        );
+
+        var first_pred = true;
+        for (args.where, 0..) |filt, i| {
+            try sql_buf.appendSlice(aa, if (first_pred) " WHERE " else " AND ");
+            first_pred = false;
+            _ = i;
+            try sql_buf.appendSlice(aa, "EXISTS (SELECT 1 FROM tags t WHERE t.memory_id = m.id AND t.key = ? AND t.value IN (");
+            for (filt.values, 0..) |_, j| {
+                if (j > 0) try sql_buf.append(aa, ',');
+                try sql_buf.append(aa, '?');
+            }
+            try sql_buf.appendSlice(aa, "))");
+        }
+
+        const col = args.order_by.column();
+        if (args.since) |_| {
+            try sql_buf.appendSlice(aa, if (first_pred) " WHERE " else " AND ");
+            first_pred = false;
+            // NULL exclusion is implicit in `>= ?` but be explicit so the
+            // intent is plain.
+            try sql_buf.appendSlice(aa, col);
+            try sql_buf.appendSlice(aa, " IS NOT NULL AND ");
+            try sql_buf.appendSlice(aa, col);
+            try sql_buf.appendSlice(aa, " >= ?");
+        }
+
+        try sql_buf.appendSlice(aa, " ORDER BY ");
+        try sql_buf.appendSlice(aa, col);
+        try sql_buf.appendSlice(aa, " DESC LIMIT ? OFFSET ?;");
+        const sql_z = try aa.dupeZ(u8, sql_buf.items);
+
+        var stmt: ?*c.sqlite3_stmt = null;
+        try sqliteOk(c.sqlite3_prepare_v2(self.db.handle, sql_z, -1, &stmt, null));
+        defer _ = c.sqlite3_finalize(stmt);
+
+        var idx: c_int = 1;
+        for (args.where) |filt| {
+            try sqliteOk(c.sqlite3_bind_text(stmt, idx, filt.key.ptr, @intCast(filt.key.len), null));
+            idx += 1;
+            for (filt.values) |v| {
+                try sqliteOk(c.sqlite3_bind_text(stmt, idx, v.ptr, @intCast(v.len), null));
+                idx += 1;
+            }
+        }
+        if (args.since) |s| {
+            try sqliteOk(c.sqlite3_bind_int64(stmt, idx, s));
+            idx += 1;
+        }
+        try sqliteOk(c.sqlite3_bind_int64(stmt, idx, @intCast(args.limit)));
+        idx += 1;
+        try sqliteOk(c.sqlite3_bind_int64(stmt, idx, @intCast(args.offset)));
+
+        var out: std.ArrayList(ListEntry) = .empty;
+        while (true) {
+            const rc = c.sqlite3_step(stmt);
+            if (rc == c.SQLITE_DONE) break;
+            if (rc != c.SQLITE_ROW) return Error.Sqlite;
+            const id = c.sqlite3_column_int64(stmt, 0);
+            const slug_text = c.sqlite3_column_text(stmt, 1);
+            const slug: ?[]const u8 = if (slug_text == null) null else try gpa.dupe(u8, std.mem.span(slug_text));
+            try out.append(gpa, .{
+                .id = id,
+                .slug = slug,
+                .format = try gpa.dupe(u8, std.mem.span(c.sqlite3_column_text(stmt, 2).?)),
+                .content = try gpa.dupe(u8, std.mem.span(c.sqlite3_column_text(stmt, 3).?)),
+                .tags_json = try self.fetchTagsJson(gpa, id),
+                .created = c.sqlite3_column_int64(stmt, 4),
+                .updated = c.sqlite3_column_int64(stmt, 5),
+                .last_accessed = c.sqlite3_column_int64(stmt, 6),
+            });
+        }
+        return .{ .memories = try out.toOwnedSlice(gpa) };
+    }
+
+    // ---- list_tags / list_tag_values / list_tag_siblings -------------
+
+    pub const KeyCount = struct { key: []const u8, memory_count: i64 };
+    pub const ValueCount = struct { value: []const u8, memory_count: i64 };
+    pub const Sibling = struct { key: []const u8, value: []const u8, co_occurrence_count: i64 };
+
+    pub fn listTags(self: *Tools, gpa: Allocator) Error![]const KeyCount {
+        const sql = "SELECT key, count(DISTINCT memory_id) FROM tags GROUP BY key ORDER BY 2 DESC, key;";
+        var stmt: ?*c.sqlite3_stmt = null;
+        try sqliteOk(c.sqlite3_prepare_v2(self.db.handle, sql, -1, &stmt, null));
+        defer _ = c.sqlite3_finalize(stmt);
+        var out: std.ArrayList(KeyCount) = .empty;
+        while (true) {
+            const rc = c.sqlite3_step(stmt);
+            if (rc == c.SQLITE_DONE) break;
+            if (rc != c.SQLITE_ROW) return Error.Sqlite;
+            try out.append(gpa, .{
+                .key = try gpa.dupe(u8, std.mem.span(c.sqlite3_column_text(stmt, 0).?)),
+                .memory_count = c.sqlite3_column_int64(stmt, 1),
+            });
+        }
+        return try out.toOwnedSlice(gpa);
+    }
+
+    pub fn listTagValues(self: *Tools, gpa: Allocator, key: []const u8) Error![]const ValueCount {
+        const sql = "SELECT value, count(DISTINCT memory_id) FROM tags WHERE key = ? GROUP BY value ORDER BY 2 DESC, value;";
+        var stmt: ?*c.sqlite3_stmt = null;
+        try sqliteOk(c.sqlite3_prepare_v2(self.db.handle, sql, -1, &stmt, null));
+        defer _ = c.sqlite3_finalize(stmt);
+        try sqliteOk(c.sqlite3_bind_text(stmt, 1, key.ptr, @intCast(key.len), null));
+        var out: std.ArrayList(ValueCount) = .empty;
+        while (true) {
+            const rc = c.sqlite3_step(stmt);
+            if (rc == c.SQLITE_DONE) break;
+            if (rc != c.SQLITE_ROW) return Error.Sqlite;
+            try out.append(gpa, .{
+                .value = try gpa.dupe(u8, std.mem.span(c.sqlite3_column_text(stmt, 0).?)),
+                .memory_count = c.sqlite3_column_int64(stmt, 1),
+            });
+        }
+        return try out.toOwnedSlice(gpa);
+    }
+
+    pub fn listTagSiblings(self: *Tools, gpa: Allocator, key: []const u8, value: []const u8) Error![]const Sibling {
+        const sql =
+            \\SELECT key, value, count(DISTINCT memory_id) AS co
+            \\FROM tags
+            \\WHERE memory_id IN (SELECT memory_id FROM tags WHERE key = ? AND value = ?)
+            \\  AND NOT (key = ? AND value = ?)
+            \\GROUP BY key, value
+            \\ORDER BY co DESC, key, value;
+        ;
+        var stmt: ?*c.sqlite3_stmt = null;
+        try sqliteOk(c.sqlite3_prepare_v2(self.db.handle, sql, -1, &stmt, null));
+        defer _ = c.sqlite3_finalize(stmt);
+        try sqliteOk(c.sqlite3_bind_text(stmt, 1, key.ptr, @intCast(key.len), null));
+        try sqliteOk(c.sqlite3_bind_text(stmt, 2, value.ptr, @intCast(value.len), null));
+        try sqliteOk(c.sqlite3_bind_text(stmt, 3, key.ptr, @intCast(key.len), null));
+        try sqliteOk(c.sqlite3_bind_text(stmt, 4, value.ptr, @intCast(value.len), null));
+        var out: std.ArrayList(Sibling) = .empty;
+        while (true) {
+            const rc = c.sqlite3_step(stmt);
+            if (rc == c.SQLITE_DONE) break;
+            if (rc != c.SQLITE_ROW) return Error.Sqlite;
+            try out.append(gpa, .{
+                .key = try gpa.dupe(u8, std.mem.span(c.sqlite3_column_text(stmt, 0).?)),
+                .value = try gpa.dupe(u8, std.mem.span(c.sqlite3_column_text(stmt, 1).?)),
+                .co_occurrence_count = c.sqlite3_column_int64(stmt, 2),
+            });
+        }
+        return try out.toOwnedSlice(gpa);
+    }
+
+    // ---- memory_history ---------------------------------------------
+
+    pub const HistoryEntry = struct {
+        id: i64,
+        memory_id: i64,
+        slug: ?[]const u8,
+        format: []const u8,
+        content: []const u8,
+        tags_snapshot: []const u8,
+        created: i64,
+        updated: i64,
+        last_accessed: i64,
+        archived_at: i64,
+        archive_reason: []const u8,
+    };
+
+    pub fn memoryHistory(self: *Tools, gpa: Allocator, target: Target) Error![]const HistoryEntry {
+        // For string target: union live-memory-id resolution with direct
+        // slug match in history. For numeric: history.memory_id only.
+        const sql_z = switch (target) {
+            .id =>
+                \\SELECT id, memory_id, slug, format, content, tags_snapshot,
+                \\       created, updated, last_accessed, archived_at, archive_reason
+                \\FROM memories_history
+                \\WHERE memory_id = ?
+                \\ORDER BY archived_at DESC;
+            ,
+            .slug =>
+                \\SELECT id, memory_id, slug, format, content, tags_snapshot,
+                \\       created, updated, last_accessed, archived_at, archive_reason
+                \\FROM memories_history
+                \\WHERE slug = ?
+                \\   OR memory_id = (SELECT id FROM memories WHERE slug = ?)
+                \\ORDER BY archived_at DESC;
+            ,
+        };
+
+        var stmt: ?*c.sqlite3_stmt = null;
+        try sqliteOk(c.sqlite3_prepare_v2(self.db.handle, sql_z, -1, &stmt, null));
+        defer _ = c.sqlite3_finalize(stmt);
+
+        switch (target) {
+            .id => |n| try sqliteOk(c.sqlite3_bind_int64(stmt, 1, n)),
+            .slug => |s| {
+                try sqliteOk(c.sqlite3_bind_text(stmt, 1, s.ptr, @intCast(s.len), null));
+                try sqliteOk(c.sqlite3_bind_text(stmt, 2, s.ptr, @intCast(s.len), null));
+            },
+        }
+
+        var out: std.ArrayList(HistoryEntry) = .empty;
+        while (true) {
+            const rc = c.sqlite3_step(stmt);
+            if (rc == c.SQLITE_DONE) break;
+            if (rc != c.SQLITE_ROW) return Error.Sqlite;
+            const slug_text = c.sqlite3_column_text(stmt, 2);
+            const slug: ?[]const u8 = if (slug_text == null) null else try gpa.dupe(u8, std.mem.span(slug_text));
+            try out.append(gpa, .{
+                .id = c.sqlite3_column_int64(stmt, 0),
+                .memory_id = c.sqlite3_column_int64(stmt, 1),
+                .slug = slug,
+                .format = try gpa.dupe(u8, std.mem.span(c.sqlite3_column_text(stmt, 3).?)),
+                .content = try gpa.dupe(u8, std.mem.span(c.sqlite3_column_text(stmt, 4).?)),
+                .tags_snapshot = try gpa.dupe(u8, std.mem.span(c.sqlite3_column_text(stmt, 5).?)),
+                .created = c.sqlite3_column_int64(stmt, 6),
+                .updated = c.sqlite3_column_int64(stmt, 7),
+                .last_accessed = c.sqlite3_column_int64(stmt, 8),
+                .archived_at = c.sqlite3_column_int64(stmt, 9),
+                .archive_reason = try gpa.dupe(u8, std.mem.span(c.sqlite3_column_text(stmt, 10).?)),
+            });
+        }
+        return try out.toOwnedSlice(gpa);
+    }
+
+    // ---- memory_status ----------------------------------------------
+
+    pub const Status = struct {
+        total_memories: i64,
+        total_chunks: i64,
+        total_tags: i64,
+        history_entries: i64,
+        embedding_model: []const u8,
+        embedding_dim: i64,
+        database_size_bytes: i64,
+        text_count: i64,
+        markdown_count: i64,
+    };
+
+    pub fn memoryStatus(self: *Tools, gpa: Allocator) Error!Status {
+        const total_memories = try self.scalarInt64("SELECT count(*) FROM memories;");
+        const total_chunks = try self.scalarInt64("SELECT count(*) FROM chunks;");
+        const total_tags = try self.scalarInt64("SELECT count(*) FROM tags;");
+        const history_entries = try self.scalarInt64("SELECT count(*) FROM memories_history;");
+        const text_count = try self.scalarInt64("SELECT count(*) FROM memories WHERE format = 'text';");
+        const markdown_count = try self.scalarInt64("SELECT count(*) FROM memories WHERE format = 'markdown';");
+
+        const model_url = (self.db.getSetting(gpa, "model_url") catch return Error.Sqlite) orelse try gpa.dupe(u8, "");
+        const dim_str = (self.db.getSetting(gpa, "embedding_dim") catch return Error.Sqlite) orelse try gpa.dupe(u8, "0");
+        defer gpa.free(dim_str);
+        const embedding_dim = std.fmt.parseInt(i64, dim_str, 10) catch 0;
+
+        // page_count * page_size — accurate for both file-backed and :memory: DBs.
+        const page_count = try self.scalarInt64("PRAGMA page_count;");
+        const page_size = try self.scalarInt64("PRAGMA page_size;");
+
+        return .{
+            .total_memories = total_memories,
+            .total_chunks = total_chunks,
+            .total_tags = total_tags,
+            .history_entries = history_entries,
+            .embedding_model = model_url,
+            .embedding_dim = embedding_dim,
+            .database_size_bytes = page_count * page_size,
+            .text_count = text_count,
+            .markdown_count = markdown_count,
+        };
+    }
+
     // ---- memory_tag / memory_untag -----------------------------------
 
     pub const TagResult = struct { id: i64, idempotent: bool };

@@ -77,10 +77,10 @@
 
 ## 11. List & discovery operations
 
-- [ ] 11.1 Implement `memory_list` with `where`, `since`, `limit`, `offset`, `order_by` (default `updated`)
-- [ ] 11.2 Implement `list_tags`, `list_tag_values`, `list_tag_siblings` per spec SQL
-- [ ] 11.3 Implement `memory_history` — union live and history table lookups for string targets; history-only for numeric targets
-- [ ] 11.4 Implement `memory_status` — aggregate counts + settings + on-disk DB size
+- [x] 11.1 Implement `memory_list` with `where`, `since`, `limit`, `offset`, `order_by` (default `updated`)
+- [x] 11.2 Implement `list_tags`, `list_tag_values`, `list_tag_siblings` per spec SQL
+- [x] 11.3 Implement `memory_history` — union live and history table lookups for string targets; history-only for numeric targets
+- [x] 11.4 Implement `memory_status` — aggregate counts + settings + on-disk DB size
 
 ## 12. CLI surface
 
