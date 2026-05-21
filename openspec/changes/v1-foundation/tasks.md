@@ -28,11 +28,11 @@
 
 ## 5. llama.cpp linkage via diogok bindings
 
-- [ ] 5.1 Fork `diogok/llama.cpp.zig` into the repo's namespace, pin to a known-good commit
-- [ ] 5.2 Add the fork as a `build.zig.zon` dependency
-- [ ] 5.3 Configure the dep with `backend = .cpu` (no Metal in v1)
-- [ ] 5.4 Verify `zig build` produces a single executable with no `default.metallib`
-- [ ] 5.5 Confirm via `otool -L` / `ldd` that no llama dynamic library is loaded at runtime
+- [x] 5.1 Fork `diogok/llama.cpp.zig` into the repo's namespace, pin to a known-good commit
+- [x] 5.2 Add the fork as a `build.zig.zon` dependency
+- [x] 5.3 Configure the dep with `backend = .cpu` (no Metal in v1)
+- [x] 5.4 Verify `zig build` produces a single executable with no `default.metallib`
+- [x] 5.5 Confirm via `otool -L` / `ldd` that no llama dynamic library is loaded at runtime
 
 ## 6. Model lifecycle
 

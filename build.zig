@@ -1,5 +1,10 @@
 const std = @import("std");
 
+/// Mirrors `Backend` in the llama.cpp.zig fork's build.zig — declared here
+/// so we can pass a typed value into `b.dependency(...)` instead of a bare
+/// enum literal (Zig 0.16 wants the type).
+const LlamaBackend = enum(u8) { cpu, vulkan, metal };
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -9,6 +14,16 @@ pub fn build(b: *std.Build) void {
     const sqlite_lib = buildSqlite(b, target, optimize);
     const sqlite_vec_lib = buildSqliteVec(b, target, optimize);
     const md4c_lib = buildMd4c(b, target, optimize);
+
+    // ---- llama.cpp bindings (daemonicai fork pinned in build.zig.zon) ----
+    // CPU-only in v1 by design — keeps the binary self-contained (no
+    // default.metallib sidecar) and dodges the Metal Toolchain dependency.
+    const llama_dep = b.dependency("llama_cpp_zig", .{
+        .target = target,
+        .optimize = optimize,
+        .backend = @as(LlamaBackend, .cpu),
+    });
+    const llama_lib = llama_dep.artifact("llama_cpp");
 
     // ---- memlite executable ----
 
@@ -24,6 +39,8 @@ pub fn build(b: *std.Build) void {
     exe_mod.linkLibrary(sqlite_lib);
     exe_mod.linkLibrary(sqlite_vec_lib);
     exe_mod.linkLibrary(md4c_lib);
+    exe_mod.linkLibrary(llama_lib);
+    exe_mod.addImport("llama_c", llama_dep.module("c"));
 
     const exe = b.addExecutable(.{
         .name = "memlite",
