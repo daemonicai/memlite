@@ -20,12 +20,22 @@ const Cli = struct {
     subcommand: Subcommand = .serve,
     db_path: ?[]const u8 = null,
     model_url: []const u8 = DEFAULT_MODEL_URL,
+    /// Resolved value: true => loader output is visible on stderr. Default
+    /// false (quiet); env var `MEMLITE_VERBOSE_LLAMA=1` flips it on unless
+    /// `verbose_llama_set` is true (explicit `--verbose-llama[=…]`).
+    verbose_llama: bool = false,
+    verbose_llama_set: bool = false,
 };
 
 pub fn main(init_args: std.process.Init) !void {
     const arena = init_args.arena.allocator();
     const args = try init_args.minimal.args.toSlice(arena);
-    const cli = try parseArgs(args);
+    var cli = try parseArgs(args);
+    if (!cli.verbose_llama_set) {
+        if (init_args.environ_map.get("MEMLITE_VERBOSE_LLAMA")) |v| {
+            cli.verbose_llama = std.mem.eql(u8, v, "1");
+        }
+    }
 
     switch (cli.subcommand) {
         .serve => try runServe(init_args, cli),
@@ -57,6 +67,20 @@ fn parseArgs(args: []const [:0]const u8) !Cli {
                 return error.MissingArgValue;
             }
             cli.model_url = args[i];
+        } else if (std.mem.eql(u8, a, "--verbose-llama")) {
+            cli.verbose_llama = true;
+            cli.verbose_llama_set = true;
+        } else if (std.mem.startsWith(u8, a, "--verbose-llama=")) {
+            const val = a["--verbose-llama=".len..];
+            if (std.mem.eql(u8, val, "true") or std.mem.eql(u8, val, "1")) {
+                cli.verbose_llama = true;
+            } else if (std.mem.eql(u8, val, "false") or std.mem.eql(u8, val, "0")) {
+                cli.verbose_llama = false;
+            } else {
+                std.log.err("memlite: --verbose-llama expects true|false|1|0 (got {s})", .{val});
+                return error.InvalidArgValue;
+            }
+            cli.verbose_llama_set = true;
         } else if (!saw_subcommand and std.mem.eql(u8, a, "serve")) {
             cli.subcommand = .serve;
             saw_subcommand = true;
@@ -93,6 +117,10 @@ fn printUsage() void {
         \\  --model URL     HuggingFace `/resolve/` URL of the GGUF embedding
         \\                  model. Pinned in settings on first init; subsequent
         \\                  runs must match.
+        \\  --verbose-llama Re-enable the llama.cpp model-loader chatter on
+        \\                  stderr (off by default to keep MCP host log panes
+        \\                  readable). `MEMLITE_VERBOSE_LLAMA=1` is an env-var
+        \\                  fallback; the flag (including `=false`) wins.
         \\  -h, --help      Show this help.
         \\
     ;
@@ -233,7 +261,7 @@ fn setupSession(init_args: std.process.Init, cli: Cli, mode: SetupMode) !Setup {
     model_mod.initBackend();
     errdefer model_mod.deinitBackend();
 
-    var model = model_mod.Model.loadFromFile(cache_path) catch |err| {
+    var model = model_mod.Model.loadFromFile(cache_path, .{ .quiet = !cli.verbose_llama }) catch |err| {
         std.log.err("memlite: failed to load model {s}: {s}", .{ cache_path, @errorName(err) });
         return err;
     };

@@ -31,13 +31,44 @@ pub fn deinitBackend() void {
     c.llama_backend_free();
 }
 
+pub const LoadOptions = struct {
+    /// When true, silence direct `fprintf(stderr, …)` chatter from the
+    /// llama.cpp loader (`llama_model_loader:`, `print_info:`,
+    /// `load_tensors:`, `create_tensor:`) by redirecting STDERR_FILENO to
+    /// `/dev/null` for the duration of `llama_model_load_from_file`. The
+    /// callback path (covered by `llama_log_set(null, null)` in
+    /// `initBackend`) is unaffected. POSIX-only; on platforms where
+    /// `/dev/null` cannot be opened or `dup` fails the load proceeds with
+    /// stderr intact rather than failing.
+    quiet: bool = false,
+};
+
 pub const Model = struct {
     handle: *c.llama_model,
 
     /// Load a GGUF file from disk. CPU-only (n_gpu_layers = 0).
-    pub fn loadFromFile(path: [:0]const u8) Error!Model {
+    pub fn loadFromFile(path: [:0]const u8, opts: LoadOptions) Error!Model {
         var params = c.llama_model_default_params();
         params.n_gpu_layers = 0;
+
+        var saved_stderr: c_int = -1;
+        if (opts.quiet) {
+            const dev_null = std.c.open("/dev/null", .{ .ACCMODE = .WRONLY }, @as(std.c.mode_t, 0));
+            if (dev_null >= 0) {
+                saved_stderr = std.c.dup(std.posix.STDERR_FILENO);
+                if (saved_stderr >= 0) {
+                    _ = std.c.dup2(dev_null, std.posix.STDERR_FILENO);
+                }
+                _ = std.c.close(dev_null);
+            }
+        }
+        defer {
+            if (saved_stderr >= 0) {
+                _ = std.c.dup2(saved_stderr, std.posix.STDERR_FILENO);
+                _ = std.c.close(saved_stderr);
+            }
+        }
+
         const m = c.llama_model_load_from_file(path.ptr, params);
         if (m == null) return Error.ModelLoadFailed;
         return .{ .handle = m.? };

@@ -100,6 +100,7 @@ Options:
 |---|---|
 | `--db PATH`       | Override the DB path. Precedence: `--db` > `$MEMLITE_DB` > `~/.memlite/memlite.db`. |
 | `--model URL`     | HuggingFace `/resolve/` URL for the GGUF embedding model. Pinned on first init; changing this against an existing DB raises `MODEL_MISMATCH`. |
+| `--verbose-llama` | Re-enable the llama.cpp model-loader chatter on stderr. Off by default so MCP host log panes stay readable. `MEMLITE_VERBOSE_LLAMA=1` is an env-var fallback; the flag (including `--verbose-llama=false`) wins. |
 | `-h`, `--help`    | Show help. |
 
 ## MCP tools

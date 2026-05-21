@@ -157,7 +157,7 @@ test "embed returns dim-N L2-normalized vector; similar texts cosine-correlate" 
     model_mod.initBackend();
     defer model_mod.deinitBackend();
 
-    var model = try model_mod.Model.loadFromFile(path);
+    var model = try model_mod.Model.loadFromFile(path, .{ .quiet = true });
     defer model.deinit();
 
     var emb = try Embedder.init(model);
