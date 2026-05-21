@@ -37,7 +37,11 @@ pub const Embedder = struct {
 
     /// Open an embedding-mode context over `model`. The Model must outlive
     /// the Embedder. CPU-only — params.n_gpu_layers stays at the default 0.
-    pub fn init(model: model_mod.Model) Error!Embedder {
+    ///
+    /// When `quiet` is true, stderr is redirected to /dev/null for the
+    /// duration of `llama_init_from_model` to suppress the verbose
+    /// context-construction diagnostics (POSIX-only, graceful fallback).
+    pub fn init(model: model_mod.Model, quiet: bool) Error!Embedder {
         var params = c.llama_context_default_params();
         params.embeddings = true;
         params.pooling_type = c.LLAMA_POOLING_TYPE_MEAN;
@@ -49,6 +53,25 @@ pub const Embedder = struct {
         // Single-shot embedding: process the whole input as one batch.
         params.n_batch = n_ctx;
         params.n_ubatch = n_ctx;
+
+        // Suppress context-creation stderr chatter when quiet.
+        var saved_stderr: c_int = -1;
+        if (quiet) {
+            const dev_null = std.c.open("/dev/null", .{ .ACCMODE = .WRONLY }, @as(std.c.mode_t, 0));
+            if (dev_null >= 0) {
+                saved_stderr = std.c.dup(std.posix.STDERR_FILENO);
+                if (saved_stderr >= 0) {
+                    _ = std.c.dup2(dev_null, std.posix.STDERR_FILENO);
+                }
+                _ = std.c.close(dev_null);
+            }
+        }
+        defer {
+            if (saved_stderr >= 0) {
+                _ = std.c.dup2(saved_stderr, std.posix.STDERR_FILENO);
+                _ = std.c.close(saved_stderr);
+            }
+        }
 
         const ctx = c.llama_init_from_model(model.handle, params);
         if (ctx == null) return Error.ContextInitFailed;
@@ -160,7 +183,7 @@ test "embed returns dim-N L2-normalized vector; similar texts cosine-correlate" 
     var model = try model_mod.Model.loadFromFile(path, .{ .quiet = true });
     defer model.deinit();
 
-    var emb = try Embedder.init(model);
+    var emb = try Embedder.init(model, true);
     defer emb.deinit();
     try testing.expectEqual(@as(u32, 768), emb.dim);
 

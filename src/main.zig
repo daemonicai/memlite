@@ -145,7 +145,7 @@ fn runServe(init_args: std.process.Init, cli: Cli) !void {
     defer model.deinit();
     defer model_mod.deinitBackend();
 
-    var embedder = try embed_mod.Embedder.init(model);
+    var embedder = try embed_mod.Embedder.init(model, !cli.verbose_llama);
     defer embedder.deinit();
 
     var tools = tools_mod.Tools.init(&db, &embedder, io);

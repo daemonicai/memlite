@@ -1486,7 +1486,7 @@ test "memory_search leaves last_accessed unchanged" {
     defer model_mod.deinitBackend();
     var model = try model_mod.Model.loadFromFile(path, .{ .quiet = true });
     defer model.deinit();
-    var embedder = try Embedder.init(model);
+    var embedder = try Embedder.init(model, true);
     defer embedder.deinit();
 
     var db = try Db.open(":memory:");
