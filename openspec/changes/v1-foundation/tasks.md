@@ -84,10 +84,10 @@
 
 ## 12. CLI surface
 
-- [ ] 12.1 Implement argument parsing: `memlite serve` (default), `memlite init`, `memlite dump`
-- [ ] 12.2 Add `--db <path>` and `--model <url>` flags shared across subcommands
-- [ ] 12.3 `memlite init` performs the model download and DB init explicitly, then exits
-- [ ] 12.4 `memlite dump` reads the DB read-only and prints rows as JSON to stdout (for debugging)
+- [x] 12.1 Implement argument parsing: `memlite serve` (default), `memlite init`, `memlite dump`
+- [x] 12.2 Add `--db <path>` and `--model <url>` flags shared across subcommands
+- [x] 12.3 `memlite init` performs the model download and DB init explicitly, then exits
+- [x] 12.4 `memlite dump` reads the DB read-only and prints rows as JSON to stdout (for debugging)
 
 ## 13. End-to-end verification
 
