@@ -23,21 +23,24 @@ v1-foundation is implemented end-to-end. The full v1 contract — schema, MCP to
 
 ## Install
 
-Build from source (Zig 0.16 is required):
+Build from source (Zig 0.16 is required). For a `~/.local/bin/memlite` install, the bundled helper does both steps:
 
 ```sh
-zig build -Doptimize=ReleaseFast
+./install.sh
 ```
+
+That's a one-liner over `zig build -Doptimize=ReleaseFast && install -m 0755 zig-out/bin/memlite ~/.local/bin/memlite`.
 
 The first build pulls in llama.cpp and compiles it for CPU — expect several minutes. Subsequent builds are cached.
 
-The resulting binary at `zig-out/bin/memlite` is fully self-contained on macOS (Apple Silicon and x86_64) and Linux. Drop it where you keep your tools:
+If you'd rather drop the binary somewhere else (or skip the install step entirely), build manually:
 
 ```sh
-install -m 0755 zig-out/bin/memlite ~/.local/bin/memlite
-# or
+zig build -Doptimize=ReleaseFast
 sudo install -m 0755 zig-out/bin/memlite /usr/local/bin/memlite
 ```
+
+The resulting binary at `zig-out/bin/memlite` is fully self-contained on macOS (Apple Silicon and x86_64) and Linux.
 
 ## First run
 
