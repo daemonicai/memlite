@@ -61,17 +61,11 @@ SQLITE_EXTENSION_INIT1
 #define LONGDOUBLE_TYPE long double
 #endif
 
-#ifndef _WIN32
-#ifndef __EMSCRIPTEN__
-#ifndef __COSMOPOLITAN__
-#ifndef __wasi__
-typedef u_int8_t uint8_t;
-typedef u_int16_t uint16_t;
-typedef u_int64_t uint64_t;
-#endif
-#endif
-#endif
-#endif
+// Upstream v0.1.9 typedef'd uint8_t/uint16_t/uint64_t from the BSD u_int*_t
+// aliases on most platforms, but musl doesn't ship those aliases, so the
+// block fails to compile under -Dtarget=*-linux-musl. <stdint.h> is included
+// above and provides the C99 names everywhere we care about, so we drop the
+// block — matches upstream `main`, which removed it for the same reason.
 
 typedef int8_t i8;
 typedef uint8_t u8;
