@@ -75,20 +75,6 @@ The system SHALL return raw RRF scores in result entries and `matches[*].score`.
 - **WHEN** the same query is run twice against an unchanged DB
 - **THEN** the returned scores are identical (deterministic ranking)
 
-### Requirement: memory_search updates last_accessed for returned memories
-
-For every memory present in a successful `memory_search` response, the system SHALL update its `last_accessed` to the current unix epoch, in the same transaction.
-
-#### Scenario: last_accessed is bumped
-
-- **WHEN** `memory_search` returns a memory in its results
-- **THEN** that memory's `last_accessed` is now strictly greater than (or equal to, if the same second) its prior value
-
-#### Scenario: Memories filtered out are not touched
-
-- **WHEN** a memory is excluded by the tag filter or trimmed by `limit`
-- **THEN** its `last_accessed` is NOT modified
-
 ### Requirement: memory_list supports paging, ordering, and a since cutoff
 
 `memory_list(where?, since?, limit?, offset?, order_by?)` SHALL return memories without scoring or embedding. `order_by` MUST be one of `'created'|'updated'|'last_accessed'` (default `'updated'`). When `since` is supplied, the system SHALL filter to memories whose `order_by` column is `>= since`. NULL values of the `order_by` column (possible for `last_accessed`) MUST be excluded when `since` is set.
@@ -165,4 +151,25 @@ The system SHALL expose three tag discovery operations:
 
 - **WHEN** the DB contains 10 memories, 23 chunks, 48 tag rows, and 4 history rows
 - **THEN** the response has `total_memories: 10`, `total_chunks: 23`, `total_tags: 48`, `history_entries: 4`
+
+### Requirement: memory_search does not modify last_accessed
+
+The system SHALL NOT modify `last_accessed` for any memory as a side effect of a `memory_search` call. Search responses still emit the current `last_accessed` value for each returned memory; the value just does not change because of the call.
+
+Agents that want to record deliberate engagement with a search result SHALL call `memory_bump(target)` after using that memory in a reply. See `memory_bump` in the `mcp-server` capability.
+
+#### Scenario: Search leaves last_accessed alone
+
+- **WHEN** `memory_search(query)` returns a memory whose prior `last_accessed = T0`
+- **THEN** that memory's `last_accessed` is exactly `T0` after the call (no in-transaction bump)
+
+#### Scenario: Search response carries the unchanged timestamp
+
+- **WHEN** `memory_search(query)` returns a memory in its results
+- **THEN** the `last_accessed` field in the response MUST be the same value `memory_get(target)` would return when called immediately before the search
+
+#### Scenario: Explicit engagement via memory_bump
+
+- **WHEN** the agent calls `memory_bump(target)` after a search result is used in a reply
+- **THEN** that memory's `last_accessed` is updated to the current unix epoch; no other memories are touched
 
