@@ -15,11 +15,6 @@ pub const c = @cImport({
 
 const Allocator = std.mem.Allocator;
 
-/// Default embedding dimension used for the vec_chunks virtual table when
-/// initSchema is called before the real model is loaded. §6 will replace
-/// this with the dimension the GGUF model actually reports.
-pub const DEFAULT_EMBEDDING_DIM: u32 = 768;
-
 pub const Error = error{
     SqliteOpenFailed,
     SqliteVecInitFailed,

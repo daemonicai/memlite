@@ -36,13 +36,13 @@
 
 ## 6. Model lifecycle
 
-- [ ] 6.1 Implement strict HuggingFace URL parser in `src/model_url.zig` — accept `/resolve/` paths only, reject `/blob/` and non-`huggingface.co` hosts
-- [ ] 6.2 Implement cache path derivation `~/.memlite/models/{owner}/{repo}/{filename}`
-- [ ] 6.3 Implement HTTPS download via `std.http.Client` with system CA roots, atomic temp-file → rename, line-oriented stderr progress
-- [ ] 6.4 Implement GGUF model load via the bindings; query and return embedding dimension
-- [ ] 6.5 First-run path: parse `--model` (or default), check cache, download if missing, load model, write settings
-- [ ] 6.6 Subsequent-run path: compare `--model` against `settings('model_url')`; on mismatch, exit with `MODEL_MISMATCH` and remedial message
-- [ ] 6.7 Replace the hardcoded `FLOAT[768]` from §4.3 with dimension read from the loaded model
+- [x] 6.1 Implement strict HuggingFace URL parser in `src/model_url.zig` — accept `/resolve/` paths only, reject `/blob/` and non-`huggingface.co` hosts
+- [x] 6.2 Implement cache path derivation `~/.memlite/models/{owner}/{repo}/{filename}`
+- [x] 6.3 Implement HTTPS download via `std.http.Client` with system CA roots, atomic temp-file → rename, line-oriented stderr progress
+- [x] 6.4 Implement GGUF model load via the bindings; query and return embedding dimension
+- [x] 6.5 First-run path: parse `--model` (or default), check cache, download if missing, load model, write settings
+- [x] 6.6 Subsequent-run path: compare `--model` against `settings('model_url')`; on mismatch, exit with `MODEL_MISMATCH` and remedial message
+- [x] 6.7 Replace the hardcoded `FLOAT[768]` from §4.3 with dimension read from the loaded model
 
 ## 7. Embedding API
 
