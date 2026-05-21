@@ -10,23 +10,31 @@ GGUF model resolved on first run.
 
 ## The spec is canonical, not the code
 
-The v1 contract lives in `openspec/changes/v1-foundation/`:
+The v1 contract lives in `openspec/specs/`:
 
-- `proposal.md` — what and why
-- `design.md` — decisions and their alternatives
-- `specs/{schema,mcp-server,ingest,search,embedding-engine}/spec.md` — normative requirements
-- `tasks.md` — the implementation checklist
+- `schema/spec.md` — tables, triggers, history semantics
+- `mcp-server/spec.md` — transport, the 16-tool surface, handshake `instructions`, error vocabulary
+- `ingest/spec.md` — markdown chunking and tag normalisation
+- `search/spec.md` — hybrid vec0 + FTS5 retrieval, RRF fusion, tag filtering
+- `embedding-engine/spec.md` — GGUF model lifecycle, download cadence, quiet-by-default loader
 
 Anything about tool signatures, error codes, schema columns, or
 retrieval semantics — answer from those specs, NOT from memory. If
 you find a divergence between code and spec, the spec wins (or the
 spec is wrong and we update it; never silently drift).
 
-Two post-v1 proposals are queued under `openspec/changes/`:
-`quiet-llama-logs` (suppress llama.cpp loader chatter on stderr) and
-`download-progress` (per-chunk progress lines during model download).
-Both modify the same requirement in `embedding-engine`; whichever ships
-second needs a small rebase.
+The original proposals + design notes + task checklists are preserved
+under `openspec/changes/archive/` — read the dated directories there
+when you need the *why* behind a requirement. v1 was assembled from
+`v1-foundation` plus five follow-ups: `quiet-llama-logs`,
+`download-progress`, `mcp-handshake-instructions`,
+`object-shaped-tool-results`, and `memory-bump-tool`.
+
+When adding NEW behavior, propose a new openspec change first
+(proposal + design + spec delta + tasks) and apply it via the
+`openspec` CLI rather than editing `openspec/specs/` directly. The
+archive process applies the delta to the consolidated specs; bypassing
+it loses the development history this project deliberately preserves.
 
 ## MCP tools you should use here
 
@@ -82,9 +90,10 @@ If not installed: ask the user to install zig-mcp.
 ```sh
 zig build                                  # Debug build (default)
 zig build -Doptimize=ReleaseFast           # Stripped 6.4 MB release binary
-zig build test --summary all               # Unit tests (one skips without MEMLITE_TEST_MODEL)
+zig build test --summary all               # Unit tests (~2 skip without MEMLITE_TEST_MODEL)
 MEMLITE_TEST_MODEL=~/.memlite/models/.../*.gguf zig build test --summary all
-                                           # All 20+ tests including the embed smoke test
+                                           # All 25 tests, including the embed smoke test
+                                           # and the memory_search no-bump test
 ```
 
 Run the server:
@@ -101,18 +110,23 @@ DB path precedence: `--db` flag → `$MEMLITE_DB` env → `~/.memlite/memlite.db
 ## Code map
 
 ```
-src/main.zig          CLI dispatch (serve/init/dump), session setup
-src/mcp.zig           JSON-RPC loop, tool list, dispatch, error envelopes
+src/main.zig          CLI dispatch (serve/init/dump), session setup, --verbose-llama flag
+src/mcp.zig           JSON-RPC loop, tool list, dispatch, error envelopes, handshake instructions
+src/instructions.md   @embedFile'd agent-facing handshake guidance (memlite usage)
 src/tools.zig         All tool implementations + the SQL they touch
 src/db.zig            Connection lifecycle, schema bootstrap, settings I/O
 src/schema.sql        @embedFile'd schema (tables + triggers)
-src/model.zig         llama_backend init, Model.loadFromFile, n_embd
+src/model.zig         llama_backend init, Model.loadFromFile (with .quiet opt), n_embd
 src/model_url.zig     Strict HF URL parser + cache path derivation
-src/download.zig      HTTPS download with atomic temp-file replace
+src/download.zig      HTTPS download with atomic temp-file replace + 5%/5MiB progress
 src/embed.zig         Embedder: pooled MEAN embedding, L2-normalized
 src/chunk.zig         md4c-based markdown chunker (H1/H2 + soft-cap)
+install.sh            Build-and-install helper (zig build + install to ~/.local/bin)
 third_party/          Vendored C amalgamations (SQLite, sqlite-vec, md4c)
 build.zig             Static lib per vendored C; ReleaseFast strips by default
+.github/workflows/release.yml
+                      Build matrix (3 targets) → all-pass gate → release publication;
+                      workflow_dispatch for manual builds without a release
 ```
 
 Convention: `tools.zig` owns the SQL surface. `db.zig` stays focused on
@@ -134,13 +148,30 @@ open/close/init/settings — don't drift CRUD helpers into it.
 - **`sqlite3_last_insert_rowid` doesn't reliably reflect trigger inserts.**
   For `memory_delete` we query `SELECT MAX(id) FROM memories_history
   WHERE memory_id = ?` instead.
-- **llama.cpp's loader chatter on stderr** is `fprintf(stderr, …)`
-  direct, not the callback path that `llama_log_set(null, null)` covers.
-  Working around this is what the `quiet-llama-logs` proposal is for —
-  if a user complains about noisy stderr, that's the fix.
+- **llama.cpp's loader chatter is silenced by default.** Model load
+  runs with `STDERR_FILENO` redirected to `/dev/null` via the `.quiet`
+  opt on `Model.loadFromFile`; `--verbose-llama` (or
+  `MEMLITE_VERBOSE_LLAMA=1`) restores it for debugging. The callback
+  path is independently silenced by `llama_log_set(null, null)` in
+  `initBackend`. Both layers matter — direct `fprintf(stderr, …)` from
+  the loader bypasses the callback hook.
+- **Tool result payloads are always JSON objects.** The MCP
+  `tools/call` result schema requires `structuredContent` to be an
+  object — bare arrays violate the protocol. When adding a list-style
+  tool, wrap the array in a single-keyed object (e.g.
+  `{"tags": [...]}`, `{"history": [...]}`). The four list-style tools
+  already do this with field names pinned in the `mcp-server` spec.
+- **`last_accessed` is the explicit-engagement signal.** `memory_get`
+  auto-bumps (deliberate single-memory fetch == engagement).
+  `memory_search` is **side-effect-free** — agents record engagement
+  with a result by calling `memory_bump(target)`. Administrative reads
+  (`memory_list`, `memory_history`, `list_tag_*`, `memory_status`)
+  never touch it. The handshake `instructions.md` coaches the agent on
+  when to call `memory_bump`.
 - **Embedder tests are gated.** The model file is ~99 MB; tests that
-  need it set `$MEMLITE_TEST_MODEL` and skip otherwise. Don't unconditionally
-  load a real model in tests.
+  need it set `$MEMLITE_TEST_MODEL` and skip otherwise. Two tests are
+  gated today: the `embed.zig` smoke test and the `tools.zig`
+  "memory_search leaves last_accessed unchanged" integration test.
 - **Cross-arch builds** rely on the daemonicai/llama.cpp.zig fork. The
   upstream had `ggml/` missing from `.paths` in `build.zig.zon`; that's
   fixed in the fork (`606ed16`). If a tag fetch ever resurfaces this
@@ -158,7 +189,11 @@ End with the Co-Authored-By trailer the user uses. Look at recent
 - **Asking the user a question is cheap.** If a spec is ambiguous or
   you're about to make a non-trivial design choice, ask via
   `AskUserQuestion` rather than guessing.
-- **Read the openspec proposal before touching anything load-bearing.**
-  Especially for retrieval, schema, or the error vocabulary.
-- **Don't drift the spec silently.** Update the openspec change
-  alongside the code when behavior changes.
+- **Read the canonical specs before touching anything load-bearing.**
+  `openspec/specs/<capability>/spec.md` is the current state. For the
+  *why* behind a requirement, dig into the dated proposal under
+  `openspec/changes/archive/`.
+- **Don't drift the spec silently.** Behavior changes go through a new
+  openspec change first — proposal + design + spec delta + tasks,
+  applied via `openspec archive`. The archive operation is what
+  updates `openspec/specs/`; never edit those files by hand.
