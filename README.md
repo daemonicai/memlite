@@ -1,5 +1,11 @@
 # memlite
 
+[![Latest release](https://img.shields.io/github/v/release/daemonicai/memlite?label=latest&color=brightgreen)](https://github.com/daemonicai/memlite/releases/latest)
+[![Build](https://img.shields.io/github/actions/workflow/status/daemonicai/memlite/release.yml?label=build)](https://github.com/daemonicai/memlite/actions/workflows/release.yml)
+[![License](https://img.shields.io/github/license/daemonicai/memlite)](LICENSE)
+[![Zig](https://img.shields.io/badge/zig-0.16-F7A41D?logo=zig&logoColor=white)](https://ziglang.org)
+[![Platforms](https://img.shields.io/badge/platforms-macOS%20arm64%20%7C%20Linux%20x86__64%20%7C%20Linux%20arm64-lightgrey)](https://github.com/daemonicai/memlite/releases/latest)
+
 A long-term memory engine for AI agents — a shared, persistent fact store that lets Claude, Pi, and any other MCP-stdio host build a continuous relationship with a single user across conversations and across agents.
 
 memlite is **not** a docs or content index. It's a store for facts, preferences, events, and the small pieces of context that make an assistant feel like it knows you.
@@ -23,7 +29,22 @@ v1-foundation is implemented end-to-end. The full v1 contract — schema, MCP to
 
 ## Install
 
-Build from source (Zig 0.16 is required). For a `~/.local/bin/memlite` install, the bundled helper does both steps:
+### Pre-built binaries (recommended)
+
+Statically linked tarballs for macOS arm64, Linux x86_64, and Linux arm64 are attached to every tagged [release](https://github.com/daemonicai/memlite/releases/latest). Pick the archive that matches your machine, extract, and drop the binary onto your `PATH`:
+
+```sh
+# Replace ARCH with one of: aarch64-macos, x86_64-linux, aarch64-linux.
+VERSION=$(curl -fsSL https://api.github.com/repos/daemonicai/memlite/releases/latest | sed -n 's/.*"tag_name": *"\(v[^"]*\)".*/\1/p')
+curl -fsSL "https://github.com/daemonicai/memlite/releases/download/${VERSION}/memlite-${VERSION}-ARCH.tar.gz" | tar -xz
+install -m 0755 "memlite-${VERSION}-ARCH/memlite" ~/.local/bin/memlite
+```
+
+Each tarball contains the `memlite` binary plus `README.md` and `LICENSE`. The binaries are fully self-contained — `otool -L` / `ldd` shows only the libc.
+
+### Build from source
+
+Zig 0.16 is required. For a `~/.local/bin/memlite` install, the bundled helper does both steps:
 
 ```sh
 ./install.sh
@@ -39,8 +60,6 @@ If you'd rather drop the binary somewhere else (or skip the install step entirel
 zig build -Doptimize=ReleaseFast
 sudo install -m 0755 zig-out/bin/memlite /usr/local/bin/memlite
 ```
-
-The resulting binary at `zig-out/bin/memlite` is fully self-contained on macOS (Apple Silicon and x86_64) and Linux.
 
 ## First run
 
