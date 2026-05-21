@@ -51,19 +51,19 @@
 
 ## 8. Lifecycle tools (no embedding yet)
 
-- [ ] 8.1 Implement `memory_add` for `format='text'` — insert memory, insert single chunk, embed, insert into `vec_chunks`, insert tags; all in one transaction
-- [ ] 8.2 Implement `memory_get` — return memory + reconstructed tags JSON; bump `last_accessed`
-- [ ] 8.3 Implement `memory_delete` — single DELETE; verify history row created by trigger
-- [ ] 8.4 Implement `memory_clear` with `retain_history` parameter
-- [ ] 8.5 Implement `memory_update` — partial content/slug/format/tags update; re-chunk on content/format change; full-replace tags
-- [ ] 8.6 Implement `memory_tag` / `memory_untag` for surgical tag mutations
+- [x] 8.1 Implement `memory_add` for `format='text'` — insert memory, insert single chunk, embed, insert into `vec_chunks`, insert tags; all in one transaction
+- [x] 8.2 Implement `memory_get` — return memory + reconstructed tags JSON; bump `last_accessed`
+- [x] 8.3 Implement `memory_delete` — single DELETE; verify history row created by trigger
+- [x] 8.4 Implement `memory_clear` with `retain_history` parameter
+- [x] 8.5 Implement `memory_update` — partial content/slug/format/tags update; re-chunk on content/format change; full-replace tags
+- [x] 8.6 Implement `memory_tag` / `memory_untag` for surgical tag mutations
 
 ## 9. Markdown chunking
 
-- [ ] 9.1 Wire md4c via `src/chunk.zig` — Zig wrapper around md4c streaming parser
-- [ ] 9.2 Implement a chunking policy: split at H1/H2 boundaries, soft-cap chunks at ~1500 chars, never split within a code block or list item
-- [ ] 9.3 Plumb `format='markdown'` through `memory_add` and `memory_update` — N chunks per memory
-- [ ] 9.4 Verify text-format memories still produce exactly one chunk with `ord=0` and `text == content`
+- [x] 9.1 Wire md4c via `src/chunk.zig` — Zig wrapper around md4c streaming parser
+- [x] 9.2 Implement a chunking policy: split at H1/H2 boundaries, soft-cap chunks at ~1500 chars, never split within a code block or list item
+- [x] 9.3 Plumb `format='markdown'` through `memory_add` and `memory_update` — N chunks per memory
+- [x] 9.4 Verify text-format memories still produce exactly one chunk with `ord=0` and `text == content`
 
 ## 10. Search
 

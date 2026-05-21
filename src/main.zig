@@ -4,6 +4,8 @@ const db_mod = @import("db.zig");
 const model_url_mod = @import("model_url.zig");
 const download_mod = @import("download.zig");
 const model_mod = @import("model.zig");
+const embed_mod = @import("embed.zig");
+const tools_mod = @import("tools.zig");
 
 /// Default model URL — §6 spec. Stored in `settings('model_url')` on first
 /// init; subsequent runs must pass the same URL or get MODEL_MISMATCH.
@@ -54,13 +56,18 @@ pub fn main(init: std.process.Init) !void {
         try db.initSchema(gpa, embedding_dim, parsed_url.raw);
     }
 
+    var embedder = try embed_mod.Embedder.init(model);
+    defer embedder.deinit();
+
+    var tools = tools_mod.Tools.init(&db, &embedder);
+
     var stdin_buf: [4 * 1024 * 1024]u8 = undefined;
     var stdin_reader: std.Io.File.Reader = .init(.stdin(), io, &stdin_buf);
 
     var stdout_buf: [64 * 1024]u8 = undefined;
     var stdout_writer: std.Io.File.Writer = .init(.stdout(), io, &stdout_buf);
 
-    try mcp.serve(gpa, &stdin_reader.interface, &stdout_writer.interface);
+    try mcp.serve(gpa, &stdin_reader.interface, &stdout_writer.interface, &tools);
 }
 
 const Cli = struct {
@@ -149,4 +156,6 @@ test {
     _ = @import("download.zig");
     _ = @import("model.zig");
     _ = @import("embed.zig");
+    _ = @import("tools.zig");
+    _ = @import("chunk.zig");
 }
