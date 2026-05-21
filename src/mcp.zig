@@ -110,6 +110,13 @@ const tool_list: []const ToolDescriptor = &.{
         ,
     },
     .{
+        .name = "memory_search",
+        .description = "Hybrid semantic + full-text search. Embeds the query, retrieves chunks from vec0 + fts5, merges via RRF (k=60), groups by memory.",
+        .input_schema_json =
+        \\{"type":"object","properties":{"query":{"type":"string"},"where":{"type":"object","description":"Tag filter: {key: string | [string,...]} — keys are AND-combined; values within a key are OR.","additionalProperties":{"oneOf":[{"type":"string"},{"type":"array","items":{"type":"string"}}]}},"limit":{"type":"integer","default":10},"oversample":{"type":"integer","default":3}},"required":["query"]}
+        ,
+    },
+    .{
         .name = "memory_untag",
         .description = "Remove a single (key, value) tag — or all values for a key when value is omitted.",
         .input_schema_json =
@@ -287,6 +294,8 @@ fn handleToolsCall(
         return callMemoryTag(aa, out, id, args, tools);
     } else if (std.mem.eql(u8, tool_name, "memory_untag")) {
         return callMemoryUntag(aa, out, id, args, tools);
+    } else if (std.mem.eql(u8, tool_name, "memory_search")) {
+        return callMemorySearch(aa, out, id, args, tools);
     }
     return writeError(out, id, code_method_not_found, tool_name);
 }
@@ -456,6 +465,62 @@ fn callMemoryUntag(
     try writeToolResult(out, id, .{ .memory_untag = result });
 }
 
+fn callMemorySearch(
+    aa: Allocator,
+    out: *Writer,
+    id: Json.Value,
+    args: ?Json.Value,
+    tools: *Tools,
+) !void {
+    const obj = (args orelse return writeError(out, id, code_invalid_params, "missing arguments")).object;
+    const query_v = obj.get("query") orelse return writeError(out, id, code_invalid_params, "missing query");
+    if (query_v != .string) return writeError(out, id, code_invalid_params, "query must be a string");
+
+    var sa: tools_mod.Tools.SearchArgs = .{ .query = query_v.string };
+
+    if (obj.get("limit")) |v| switch (v) {
+        .integer => |n| sa.limit = if (n <= 0) 10 else @intCast(n),
+        else => return writeError(out, id, code_invalid_params, "limit must be an integer"),
+    };
+    if (obj.get("oversample")) |v| switch (v) {
+        .integer => |n| sa.oversample = if (n <= 0) 3 else @intCast(n),
+        else => return writeError(out, id, code_invalid_params, "oversample must be an integer"),
+    };
+
+    if (obj.get("where")) |w| {
+        sa.where = parseTagFilters(aa, w) catch |err| return writeError(out, id, code_invalid_params, @errorName(err));
+    }
+
+    const result = tools.memorySearch(aa, sa) catch |err| return finalizeToolError(out, id, err);
+    try writeToolResult(out, id, .{ .memory_search = result });
+}
+
+fn parseTagFilters(aa: Allocator, v: Json.Value) ![]const tools_mod.Tools.TagFilter {
+    if (v != .object) return error.WhereMustBeObject;
+    var list: std.ArrayList(tools_mod.Tools.TagFilter) = .empty;
+    var it = v.object.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+        switch (entry.value_ptr.*) {
+            .string => |s| {
+                const vals = try aa.alloc([]const u8, 1);
+                vals[0] = s;
+                try list.append(aa, .{ .key = key, .values = vals });
+            },
+            .array => |arr| {
+                const vals = try aa.alloc([]const u8, arr.items.len);
+                for (arr.items, 0..) |it_v, i| {
+                    if (it_v != .string) return error.TagFilterValueMustBeString;
+                    vals[i] = it_v.string;
+                }
+                try list.append(aa, .{ .key = key, .values = vals });
+            },
+            else => return error.TagFilterValueMustBeStringOrArray,
+        }
+    }
+    return try list.toOwnedSlice(aa);
+}
+
 // =====================================================================
 // Result + error serialization
 // =====================================================================
@@ -468,6 +533,7 @@ const ToolResult = union(enum) {
     memory_update: tools_mod.Tools.UpdateResult,
     memory_tag: tools_mod.Tools.TagResult,
     memory_untag: tools_mod.Tools.UntagResult,
+    memory_search: tools_mod.Tools.SearchResult,
 };
 
 fn writeToolResult(out: *Writer, id: Json.Value, result: ToolResult) !void {
@@ -587,6 +653,50 @@ fn emitResultPayload(s: *Stringify, result: ToolResult) !void {
             try s.write(r.id);
             try s.objectField("removed_count");
             try s.write(r.removed_count);
+            try s.endObject();
+        },
+        .memory_search => |r| {
+            try s.beginObject();
+            try s.objectField("memories");
+            try s.beginArray();
+            for (r.memories) |m| {
+                try s.beginObject();
+                try s.objectField("id");
+                try s.write(m.id);
+                try s.objectField("slug");
+                if (m.slug) |slug| try s.write(slug) else try s.write(null);
+                try s.objectField("format");
+                try s.write(m.format);
+                try s.objectField("content");
+                try s.write(m.content);
+                try s.objectField("tags");
+                try s.beginWriteRaw();
+                try s.writer.writeAll(m.tags_json);
+                s.endWriteRaw();
+                try s.objectField("score");
+                try s.write(m.score);
+                try s.objectField("matches");
+                try s.beginArray();
+                for (m.matches) |ch| {
+                    try s.beginObject();
+                    try s.objectField("ord");
+                    try s.write(ch.ord);
+                    try s.objectField("text");
+                    try s.write(ch.text);
+                    try s.objectField("score");
+                    try s.write(ch.score);
+                    try s.endObject();
+                }
+                try s.endArray();
+                try s.objectField("created");
+                try s.write(m.created);
+                try s.objectField("updated");
+                try s.write(m.updated);
+                try s.objectField("last_accessed");
+                try s.write(m.last_accessed);
+                try s.endObject();
+            }
+            try s.endArray();
             try s.endObject();
         },
     }

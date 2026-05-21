@@ -306,6 +306,192 @@ pub const Tools = struct {
         return .{ .id = id, .chunks_replaced = chunks_replaced, .tags_replaced = tags_replaced };
     }
 
+    // ---- memory_search -----------------------------------------------
+
+    pub const TagFilter = struct {
+        key: []const u8,
+        /// One or more values; semantics is "key = K AND value IN values".
+        values: []const []const u8,
+    };
+
+    pub const SearchArgs = struct {
+        query: []const u8,
+        where: []const TagFilter = &.{},
+        limit: u32 = 10,
+        oversample: u32 = 3,
+    };
+
+    pub const ChunkMatch = struct {
+        chunk_id: i64,
+        memory_id: i64,
+        ord: i64,
+        text: []const u8,
+        score: f64,
+    };
+
+    pub const MemoryMatch = struct {
+        id: i64,
+        slug: ?[]const u8,
+        format: []const u8,
+        content: []const u8,
+        tags_json: []const u8,
+        score: f64,
+        matches: []const ChunkMatch,
+        created: i64,
+        updated: i64,
+        last_accessed: i64,
+    };
+
+    pub const SearchResult = struct {
+        memories: []const MemoryMatch,
+    };
+
+    pub fn memorySearch(self: *Tools, gpa: Allocator, args: SearchArgs) Error!SearchResult {
+        const query_embedding = self.embedder.embed(gpa, args.query) catch return Error.EmbeddingFailed;
+        defer gpa.free(query_embedding);
+
+        const limit = if (args.limit == 0) 10 else args.limit;
+        const oversample = if (args.oversample == 0) 3 else args.oversample;
+        const k: u32 = limit *| oversample;
+
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        defer arena.deinit();
+        const aa = arena.allocator();
+
+        // Pre-filtered memory ids via tag filter (or null for "all").
+        const allowed_ids: ?[]const i64 = if (args.where.len == 0)
+            null
+        else
+            try self.filterMemoriesByTags(aa, args.where);
+        if (allowed_ids) |ids| if (ids.len == 0) {
+            return .{ .memories = &.{} };
+        };
+
+        const vec_hits = try self.vecSearch(aa, query_embedding, k, allowed_ids);
+        const fts_hits = try self.ftsSearch(aa, args.query, k, allowed_ids);
+
+        // RRF combine. Map chunk_id -> running score; track first hit so we can
+        // resolve memory_id, ord, text once at the end.
+        var scores: std.AutoArrayHashMapUnmanaged(i64, f64) = .empty;
+        defer scores.deinit(aa);
+
+        for (vec_hits, 0..) |hit, rank0| {
+            const contribution = 1.0 / (60.0 + @as(f64, @floatFromInt(rank0 + 1)));
+            const gop = try scores.getOrPut(aa, hit);
+            if (!gop.found_existing) gop.value_ptr.* = 0.0;
+            gop.value_ptr.* += contribution;
+        }
+        for (fts_hits, 0..) |hit, rank0| {
+            const contribution = 1.0 / (60.0 + @as(f64, @floatFromInt(rank0 + 1)));
+            const gop = try scores.getOrPut(aa, hit);
+            if (!gop.found_existing) gop.value_ptr.* = 0.0;
+            gop.value_ptr.* += contribution;
+        }
+
+        if (scores.count() == 0) return .{ .memories = &.{} };
+
+        // Resolve chunk metadata and group by memory_id.
+        var by_memory: std.AutoArrayHashMapUnmanaged(i64, std.ArrayList(ChunkMatch)) = .empty;
+        defer {
+            var it = by_memory.iterator();
+            while (it.next()) |entry| entry.value_ptr.deinit(aa);
+            by_memory.deinit(aa);
+        }
+
+        var score_it = scores.iterator();
+        while (score_it.next()) |entry| {
+            const chunk_id = entry.key_ptr.*;
+            const score = entry.value_ptr.*;
+            const meta = self.chunkMeta(aa, chunk_id) catch |err| switch (err) {
+                Error.NotFound => continue, // chunk gone between query and read; skip
+                else => return err,
+            };
+            const m_gop = try by_memory.getOrPut(aa, meta.memory_id);
+            if (!m_gop.found_existing) m_gop.value_ptr.* = .empty;
+            try m_gop.value_ptr.append(aa, .{
+                .chunk_id = chunk_id,
+                .memory_id = meta.memory_id,
+                .ord = meta.ord,
+                .text = meta.text,
+                .score = score,
+            });
+        }
+
+        // Rank memories by max chunk score.
+        const Entry = struct { memory_id: i64, top_score: f64, chunks: []ChunkMatch };
+        var ranked: std.ArrayList(Entry) = .empty;
+        defer ranked.deinit(aa);
+        {
+            var it = by_memory.iterator();
+            while (it.next()) |kv| {
+                const chunks = kv.value_ptr.items;
+                std.mem.sort(ChunkMatch, chunks, {}, struct {
+                    fn lessThan(_: void, a: ChunkMatch, b: ChunkMatch) bool {
+                        return a.score > b.score;
+                    }
+                }.lessThan);
+                try ranked.append(aa, .{
+                    .memory_id = kv.key_ptr.*,
+                    .top_score = chunks[0].score,
+                    .chunks = chunks,
+                });
+            }
+        }
+        std.mem.sort(Entry, ranked.items, {}, struct {
+            fn lessThan(_: void, a: Entry, b: Entry) bool {
+                return a.top_score > b.top_score;
+            }
+        }.lessThan);
+
+        const memories_to_return = @min(@as(usize, @intCast(limit)), ranked.items.len);
+
+        // Materialize MemoryMatch list in caller's gpa so it survives the arena.
+        const out_mems = try gpa.alloc(MemoryMatch, memories_to_return);
+
+        try self.exec("BEGIN IMMEDIATE;");
+        errdefer self.exec("ROLLBACK;") catch {};
+
+        for (ranked.items[0..memories_to_return], 0..) |entry, out_i| {
+            const meta = try self.memoryHeader(gpa, entry.memory_id);
+            const tags = try self.fetchTagsJson(gpa, entry.memory_id);
+
+            // Bump last_accessed in the same transaction; read it back so
+            // the response carries the post-bump value the spec promises.
+            try self.bumpLastAccessed(entry.memory_id);
+            const new_last_accessed = try self.scalarBoundI64(
+                "SELECT last_accessed FROM memories WHERE id = ?;",
+                entry.memory_id,
+            );
+
+            const chunk_copies = try gpa.alloc(ChunkMatch, entry.chunks.len);
+            for (entry.chunks, 0..) |ch, i| {
+                chunk_copies[i] = .{
+                    .chunk_id = ch.chunk_id,
+                    .memory_id = ch.memory_id,
+                    .ord = ch.ord,
+                    .text = try gpa.dupe(u8, ch.text),
+                    .score = ch.score,
+                };
+            }
+
+            out_mems[out_i] = .{
+                .id = entry.memory_id,
+                .slug = meta.slug,
+                .format = meta.format,
+                .content = meta.content,
+                .tags_json = tags,
+                .score = entry.top_score,
+                .matches = chunk_copies,
+                .created = meta.created,
+                .updated = meta.updated,
+                .last_accessed = new_last_accessed,
+            };
+        }
+
+        try self.exec("COMMIT;");
+        return .{ .memories = out_mems };
+    }
+
     // ---- memory_tag / memory_untag -----------------------------------
 
     pub const TagResult = struct { id: i64, idempotent: bool };
@@ -481,6 +667,199 @@ pub const Tools = struct {
         return try gpa.dupe(u8, std.mem.span(text_ptr));
     }
 
+    // ---- Search helpers -----------------------------------------------
+
+    const ChunkMeta = struct {
+        memory_id: i64,
+        ord: i64,
+        text: []const u8,
+    };
+
+    const MemoryHeader = struct {
+        slug: ?[]const u8,
+        format: []const u8,
+        content: []const u8,
+        created: i64,
+        updated: i64,
+    };
+
+    fn vecSearch(
+        self: *Tools,
+        arena: Allocator,
+        query_embedding: []const f32,
+        k: u32,
+        allowed_ids: ?[]const i64,
+    ) Error![]const i64 {
+        // sqlite-vec wants the k bound positionally on its right-hand side;
+        // tag filtering is applied by pre-filtering rowid via an IN list.
+        var sql_buf: std.ArrayList(u8) = .empty;
+        try sql_buf.appendSlice(arena,
+            "SELECT rowid FROM vec_chunks WHERE embedding MATCH ? AND k = ?",
+        );
+        if (allowed_ids) |ids| {
+            try sql_buf.appendSlice(arena, " AND rowid IN (SELECT id FROM chunks WHERE memory_id IN (");
+            try appendIntList(arena, &sql_buf, ids);
+            try sql_buf.appendSlice(arena, "))");
+        }
+        try sql_buf.appendSlice(arena, " ORDER BY distance");
+        try sql_buf.append(arena, ';');
+        const sql_z = try arena.dupeZ(u8, sql_buf.items);
+
+        var stmt: ?*c.sqlite3_stmt = null;
+        try sqliteOk(c.sqlite3_prepare_v2(self.db.handle, sql_z, -1, &stmt, null));
+        defer _ = c.sqlite3_finalize(stmt);
+        const bytes = std.mem.sliceAsBytes(query_embedding);
+        try sqliteOk(c.sqlite3_bind_blob(stmt, 1, bytes.ptr, @intCast(bytes.len), null));
+        try sqliteOk(c.sqlite3_bind_int64(stmt, 2, @intCast(k)));
+
+        var out: std.ArrayList(i64) = .empty;
+        while (true) {
+            const rc = c.sqlite3_step(stmt);
+            if (rc == c.SQLITE_DONE) break;
+            if (rc != c.SQLITE_ROW) return Error.Sqlite;
+            try out.append(arena, c.sqlite3_column_int64(stmt, 0));
+        }
+        return try out.toOwnedSlice(arena);
+    }
+
+    fn ftsSearch(
+        self: *Tools,
+        arena: Allocator,
+        query: []const u8,
+        k: u32,
+        allowed_ids: ?[]const i64,
+    ) Error![]const i64 {
+        // Sanitize the query: keep alphanumeric + whitespace, drop everything
+        // else. FTS5 free text otherwise interprets punctuation as operators.
+        const cleaned = try sanitizeFtsQuery(arena, query);
+        if (cleaned.len == 0) return &.{};
+
+        var sql_buf: std.ArrayList(u8) = .empty;
+        try sql_buf.appendSlice(arena, "SELECT rowid FROM fts_chunks WHERE text MATCH ?");
+        if (allowed_ids) |ids| {
+            try sql_buf.appendSlice(arena, " AND rowid IN (SELECT id FROM chunks WHERE memory_id IN (");
+            try appendIntList(arena, &sql_buf, ids);
+            try sql_buf.appendSlice(arena, "))");
+        }
+        try sql_buf.appendSlice(arena, " ORDER BY bm25(fts_chunks) LIMIT ?;");
+        const sql_z = try arena.dupeZ(u8, sql_buf.items);
+
+        var stmt: ?*c.sqlite3_stmt = null;
+        try sqliteOk(c.sqlite3_prepare_v2(self.db.handle, sql_z, -1, &stmt, null));
+        defer _ = c.sqlite3_finalize(stmt);
+        try sqliteOk(c.sqlite3_bind_text(stmt, 1, cleaned.ptr, @intCast(cleaned.len), null));
+        try sqliteOk(c.sqlite3_bind_int64(stmt, 2, @intCast(k)));
+
+        var out: std.ArrayList(i64) = .empty;
+        while (true) {
+            const rc = c.sqlite3_step(stmt);
+            if (rc == c.SQLITE_DONE) break;
+            if (rc != c.SQLITE_ROW) {
+                // An invalid FTS query (e.g. a stop-word only string) shows up
+                // as an error; treat it as "no FTS hits" rather than failing
+                // the whole search.
+                return &.{};
+            }
+            try out.append(arena, c.sqlite3_column_int64(stmt, 0));
+        }
+        return try out.toOwnedSlice(arena);
+    }
+
+    fn filterMemoriesByTags(
+        self: *Tools,
+        arena: Allocator,
+        filters: []const TagFilter,
+    ) Error![]const i64 {
+        // Build:
+        //   SELECT id FROM memories m
+        //   WHERE EXISTS (SELECT 1 FROM tags t WHERE t.memory_id = m.id AND t.key = ? AND t.value IN (?, ?, ...))
+        //     AND EXISTS (...)
+        var sql_buf: std.ArrayList(u8) = .empty;
+        try sql_buf.appendSlice(arena, "SELECT id FROM memories m");
+        var first = true;
+        for (filters) |_| {
+            try sql_buf.appendSlice(arena, if (first) " WHERE EXISTS " else " AND EXISTS ");
+            try sql_buf.appendSlice(arena, "(SELECT 1 FROM tags t WHERE t.memory_id = m.id AND t.key = ? AND t.value IN (");
+            // Placeholders for values are added below using bound params, but
+            // we don't know the count at SQL-build time without iterating.
+            first = false;
+        }
+        // Build the full SQL with the right number of `?` placeholders for
+        // each filter's values.
+        sql_buf.clearRetainingCapacity();
+        try sql_buf.appendSlice(arena, "SELECT id FROM memories m");
+        for (filters, 0..) |filt, i| {
+            try sql_buf.appendSlice(arena, if (i == 0) " WHERE EXISTS " else " AND EXISTS ");
+            try sql_buf.appendSlice(arena, "(SELECT 1 FROM tags t WHERE t.memory_id = m.id AND t.key = ? AND t.value IN (");
+            for (filt.values, 0..) |_, j| {
+                if (j > 0) try sql_buf.append(arena, ',');
+                try sql_buf.append(arena, '?');
+            }
+            try sql_buf.appendSlice(arena, "))");
+        }
+        try sql_buf.append(arena, ';');
+        const sql_z = try arena.dupeZ(u8, sql_buf.items);
+
+        var stmt: ?*c.sqlite3_stmt = null;
+        try sqliteOk(c.sqlite3_prepare_v2(self.db.handle, sql_z, -1, &stmt, null));
+        defer _ = c.sqlite3_finalize(stmt);
+
+        var idx: c_int = 1;
+        for (filters) |filt| {
+            try sqliteOk(c.sqlite3_bind_text(stmt, idx, filt.key.ptr, @intCast(filt.key.len), null));
+            idx += 1;
+            for (filt.values) |v| {
+                try sqliteOk(c.sqlite3_bind_text(stmt, idx, v.ptr, @intCast(v.len), null));
+                idx += 1;
+            }
+        }
+
+        var out: std.ArrayList(i64) = .empty;
+        while (true) {
+            const rc = c.sqlite3_step(stmt);
+            if (rc == c.SQLITE_DONE) break;
+            if (rc != c.SQLITE_ROW) return Error.Sqlite;
+            try out.append(arena, c.sqlite3_column_int64(stmt, 0));
+        }
+        return try out.toOwnedSlice(arena);
+    }
+
+    fn chunkMeta(self: *Tools, arena: Allocator, chunk_id: i64) Error!ChunkMeta {
+        const sql = "SELECT memory_id, ord, text FROM chunks WHERE id = ?;";
+        var stmt: ?*c.sqlite3_stmt = null;
+        try sqliteOk(c.sqlite3_prepare_v2(self.db.handle, sql, -1, &stmt, null));
+        defer _ = c.sqlite3_finalize(stmt);
+        try sqliteOk(c.sqlite3_bind_int64(stmt, 1, chunk_id));
+        const rc = c.sqlite3_step(stmt);
+        if (rc == c.SQLITE_DONE) return Error.NotFound;
+        if (rc != c.SQLITE_ROW) return Error.Sqlite;
+        return .{
+            .memory_id = c.sqlite3_column_int64(stmt, 0),
+            .ord = c.sqlite3_column_int64(stmt, 1),
+            .text = try arena.dupe(u8, std.mem.span(c.sqlite3_column_text(stmt, 2).?)),
+        };
+    }
+
+    fn memoryHeader(self: *Tools, gpa: Allocator, id: i64) Error!MemoryHeader {
+        const sql = "SELECT slug, format, content, created, updated FROM memories WHERE id = ?;";
+        var stmt: ?*c.sqlite3_stmt = null;
+        try sqliteOk(c.sqlite3_prepare_v2(self.db.handle, sql, -1, &stmt, null));
+        defer _ = c.sqlite3_finalize(stmt);
+        try sqliteOk(c.sqlite3_bind_int64(stmt, 1, id));
+        const rc = c.sqlite3_step(stmt);
+        if (rc == c.SQLITE_DONE) return Error.NotFound;
+        if (rc != c.SQLITE_ROW) return Error.Sqlite;
+        const slug_text = c.sqlite3_column_text(stmt, 0);
+        const slug: ?[]const u8 = if (slug_text == null) null else try gpa.dupe(u8, std.mem.span(slug_text));
+        return .{
+            .slug = slug,
+            .format = try gpa.dupe(u8, std.mem.span(c.sqlite3_column_text(stmt, 1).?)),
+            .content = try gpa.dupe(u8, std.mem.span(c.sqlite3_column_text(stmt, 2).?)),
+            .created = c.sqlite3_column_int64(stmt, 3),
+            .updated = c.sqlite3_column_int64(stmt, 4),
+        };
+    }
+
     fn fetchFormat(self: *Tools, gpa: Allocator, id: i64) Error![]const u8 {
         const sql = "SELECT format FROM memories WHERE id = ?;";
         var stmt: ?*c.sqlite3_stmt = null;
@@ -558,6 +937,15 @@ pub const Tools = struct {
         try self.execBindOnlyId("DELETE FROM chunks WHERE memory_id = ?;", id);
     }
 
+    fn scalarBoundI64(self: *Tools, sql: [:0]const u8, id: i64) Error!i64 {
+        var stmt: ?*c.sqlite3_stmt = null;
+        try sqliteOk(c.sqlite3_prepare_v2(self.db.handle, sql.ptr, -1, &stmt, null));
+        defer _ = c.sqlite3_finalize(stmt);
+        try sqliteOk(c.sqlite3_bind_int64(stmt, 1, id));
+        if (c.sqlite3_step(stmt) != c.SQLITE_ROW) return Error.Sqlite;
+        return c.sqlite3_column_int64(stmt, 0);
+    }
+
     fn scalarInt64(self: *Tools, sql: [:0]const u8) Error!i64 {
         var stmt: ?*c.sqlite3_stmt = null;
         try sqliteOk(c.sqlite3_prepare_v2(self.db.handle, sql.ptr, -1, &stmt, null));
@@ -598,6 +986,30 @@ pub const Tools = struct {
 
 fn sqliteOk(rc: c_int) Error!void {
     if (rc != c.SQLITE_OK) return Error.Sqlite;
+}
+
+fn appendIntList(arena: Allocator, buf: *std.ArrayList(u8), ids: []const i64) !void {
+    for (ids, 0..) |id, i| {
+        if (i > 0) try buf.append(arena, ',');
+        try buf.print(arena, "{d}", .{id});
+    }
+}
+
+fn sanitizeFtsQuery(arena: Allocator, query: []const u8) ![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    var last_space = true;
+    for (query) |ch| {
+        const keep = (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or
+            (ch >= '0' and ch <= '9') or ch == '_';
+        if (keep) {
+            try out.append(arena, ch);
+            last_space = false;
+        } else if (!last_space) {
+            try out.append(arena, ' ');
+            last_space = true;
+        }
+    }
+    return try out.toOwnedSlice(arena);
 }
 
 fn isValidFormat(f: []const u8) bool {

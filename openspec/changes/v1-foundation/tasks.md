@@ -67,13 +67,13 @@
 
 ## 10. Search
 
-- [ ] 10.1 Implement query embedding in `memory_search`
-- [ ] 10.2 Build the tag-filter `EXISTS` SQL generator for the `where` parameter
-- [ ] 10.3 Implement chunk-level retrieval with oversampling: top `limit * oversample` from `vec_chunks` and from `fts_chunks`
-- [ ] 10.4 Combine via RRF (`k=60`): chunks present in only one list get zero contribution from the other
-- [ ] 10.5 Group by `memory_id`, sort `matches[]` by chunk score desc, set memory score to `max(matches[*].score)`
-- [ ] 10.6 Trim to `limit` memories, build the response shape per spec
-- [ ] 10.7 Bump `last_accessed` for every returned memory, in the same transaction
+- [x] 10.1 Implement query embedding in `memory_search`
+- [x] 10.2 Build the tag-filter `EXISTS` SQL generator for the `where` parameter
+- [x] 10.3 Implement chunk-level retrieval with oversampling: top `limit * oversample` from `vec_chunks` and from `fts_chunks`
+- [x] 10.4 Combine via RRF (`k=60`): chunks present in only one list get zero contribution from the other
+- [x] 10.5 Group by `memory_id`, sort `matches[]` by chunk score desc, set memory score to `max(matches[*].score)`
+- [x] 10.6 Trim to `limit` memories, build the response shape per spec
+- [x] 10.7 Bump `last_accessed` for every returned memory, in the same transaction
 
 ## 11. List & discovery operations
 
