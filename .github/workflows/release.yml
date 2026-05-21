@@ -1,0 +1,74 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.archive_suffix }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-macos
+            os: macos-14
+            archive_suffix: aarch64-macos
+          - target: x86_64-linux-musl
+            os: ubuntu-latest
+            archive_suffix: x86_64-linux
+          - target: aarch64-linux-musl
+            os: ubuntu-latest
+            archive_suffix: aarch64-linux
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Zig 0.16.0
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      # Cache fetched Zig package dependencies (llama.cpp.zig + its
+      # llama.cpp subdep). Keyed by build.zig.zon so a dep bump
+      # invalidates cleanly. Per-target build artifacts (.zig-cache) are
+      # not cached — they're small relative to the dep fetch and avoid
+      # cross-target pollution.
+      - name: Cache Zig packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/zig
+          key: zig-pkgs-${{ runner.os }}-${{ hashFiles('build.zig.zon') }}
+          restore-keys: |
+            zig-pkgs-${{ runner.os }}-
+
+      - name: Build
+        run: zig build -Doptimize=ReleaseFast -Dtarget=${{ matrix.target }}
+
+      - name: Inspect binary
+        run: |
+          file zig-out/bin/memlite
+          if [ "$(uname -s)" = "Darwin" ]; then
+            otool -L zig-out/bin/memlite
+          fi
+
+      - name: Package
+        run: |
+          stage="memlite-${{ github.ref_name }}-${{ matrix.archive_suffix }}"
+          mkdir -p "dist/$stage"
+          cp zig-out/bin/memlite "dist/$stage/"
+          cp README.md LICENSE "dist/$stage/"
+          tar -C dist -czf "dist/$stage.tar.gz" "$stage"
+          ls -la dist/
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/memlite-*.tar.gz
+          generate_release_notes: true
+          fail_on_unmatched_files: true

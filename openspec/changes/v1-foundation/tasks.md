@@ -111,3 +111,11 @@
 - [x] 15.3 Add `memory_load` tool descriptor, dispatch, and `INVALID_PATH` AppError to `src/mcp.zig`; thread `std.Io` into `Tools` so file reads have an Io instance
 - [x] 15.4 Manual E2E test: write a real markdown file under `/tmp/`, call `memory_load` for it, verify chunks_created and that memory_get returns the file's content
 - [x] 15.5 Add `memory_load` row to the MCP tool table in `README.md`
+
+## 16. GitHub Actions release
+
+- [x] 16.1 `.github/workflows/release.yml` triggers on `v*` tags
+- [x] 16.2 Matrix builds: aarch64-macos (on macos-14), x86_64-linux-musl (on ubuntu-latest), aarch64-linux-musl (on ubuntu-latest cross-compile)
+- [x] 16.3 Each job packages the stripped binary + `README.md` + `LICENSE` into `memlite-<tag>-<target>.tar.gz`
+- [x] 16.4 `softprops/action-gh-release@v2` creates the GitHub release (idempotent across matrix legs) with auto-generated release notes
+- [x] 16.5 Cache `~/.cache/zig` (the package fetch cache) keyed on `build.zig.zon` to skip re-downloading llama.cpp + its deps on every tag
