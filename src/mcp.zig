@@ -19,6 +19,12 @@ pub const PROTOCOL_VERSION = "2025-11-25";
 pub const SERVER_NAME = "memlite";
 pub const SERVER_VERSION = "0.1.0";
 
+/// Agent-facing usage guidance, emitted as the `instructions` field of the
+/// MCP `initialize` result. Hosts that surface this field inject it into
+/// the model's system prompt before any user message. See
+/// openspec/changes/mcp-handshake-instructions.
+pub const INSTRUCTIONS = @embedFile("instructions.md");
+
 const code_parse_error = -32700;
 const code_invalid_request = -32600;
 const code_method_not_found = -32601;
@@ -272,6 +278,8 @@ fn writeInitialize(out: *Writer, id: Json.Value) !void {
     try s.objectField("version");
     try s.write(SERVER_VERSION);
     try s.endObject();
+    try s.objectField("instructions");
+    try s.write(INSTRUCTIONS);
     try s.endObject();
     try s.endObject();
     try out.writeByte('\n');
