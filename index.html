@@ -204,6 +204,62 @@
       font-size: 0.75rem;
     }
 
+    /* ── Dynamic Download ─────────── */
+
+    .download-bar {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-bottom: 20px;
+    }
+    .download-bar .btn-dl {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 24px;
+      background: var(--accent);
+      color: #0d1117;
+      border-radius: var(--radius);
+      font-size: 0.95rem;
+      font-weight: 600;
+      text-decoration: none;
+      transition: background 0.15s;
+    }
+    .download-bar .btn-dl:hover { background: #e0900a; }
+    .download-bar .btn-dl::before { content: "↓"; font-size: 1rem; }
+    .download-bar .meta {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      line-height: 1.4;
+    }
+    .download-bar .meta strong {
+      color: var(--text);
+      font-weight: 600;
+    }
+    .download-loading {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      padding: 24px 0;
+    }
+    .spinner {
+      width: 16px; height: 16px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .download-other {
+      font-size: 0.82rem;
+      color: var(--text-muted);
+      margin-top: 8px;
+    }
+    .download-other a { margin: 0 6px; }
+
     /* ── Footer ───────────────────── */
 
     .footer {
@@ -303,19 +359,22 @@
     <div class="container">
       <h2>Quick Start</h2>
 
-      <div class="code-block">
-        <pre><span class="cmt"># Download the latest release</span>
-<span class="cmd">curl</span> <span class="opt">-fsSL</span> <span class="str">https://github.com/daemonicai/memlite/releases/latest</span>
-
-<span class="cmt"># Extract and install</span>
-<span class="cmd">tar</span> <span class="opt">-xzf</span> memlite-*.tar.gz
-<span class="cmd">install</span> <span class="opt">-m 0755</span> memlite-*/memlite <span class="str">~/.local/bin/memlite</span>
-
-<span class="cmt"># Initialize (downloads model, creates database)</span>
-<span class="cmd">memlite</span> init</pre>
+      <div id="download-section">
+        <div class="download-loading">
+          <div class="spinner"></div>
+          <span>Resolving latest release for your system&hellip;</span>
+        </div>
       </div>
 
-      <div class="badge">See <a href="https://github.com/daemonicai/memlite/releases/latest">releases</a> for pre-built binaries (macOS arm64, Linux x86_64, Linux arm64)</div>
+      <noscript>
+        <div class="code-block">
+          <pre>Download the <a href="https://github.com/daemonicai/memlite/releases/latest" style="color: var(--accent)">latest release</a> tarball for your platform, then:
+
+<span class="cmd">tar</span> <span class="opt">-xzf</span> memlite-*.tar.gz
+<span class="cmd">install</span> <span class="opt">-m 0755</span> memlite-*/memlite <span class="str">~/.local/bin/memlite</span>
+<span class="cmd">memlite</span> init</pre>
+        </div>
+      </noscript>
 
       <!-- ── Claude Code ─────────────── -->
 
@@ -367,6 +426,137 @@
       </div>
     </div>
   </footer>
+
+  <script>
+  (function () {
+    var el = document.getElementById("download-section");
+    if (!el) return;
+
+    // Detect OS + arch
+    var p = (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || "";
+    var os = "unknown";
+    var suffix = null;
+    var label = "";
+
+    if (/(Mac|iPhone|iPad|iPod)/i.test(p)) {
+      os = "macos";
+      suffix = "aarch64-macos";
+      label = "macOS (Apple Silicon)";
+    } else if (/Linux/i.test(p)) {
+      os = "linux";
+      if (/aarch64|arm64|armv8/i.test(p)) {
+        suffix = "aarch64-linux";
+        label = "Linux (ARM64)";
+      } else if (/x86_64|amd64/i.test(p)) {
+        suffix = "x86_64-linux";
+        label = "Linux (x86_64)";
+      } else {
+        // Can't determine arch — try both
+        suffix = null;
+        label = "Linux";
+      }
+    }
+
+    // Fetch latest release
+    fetch("https://api.github.com/repos/daemonicai/memlite/releases/latest")
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        var tag = data.tag_name;
+        var assets = data.assets || [];
+
+        function match(s) {
+          return assets.find(function (a) { return a.name.indexOf(s) !== -1; });
+        }
+
+        var asset = suffix ? match(suffix) : null;
+        var url, size;
+
+        if (asset) {
+          url = asset.browser_download_url;
+          size = formatSize(asset.size);
+        } else {
+          // Fallback: unknown OS or no match — show manual picker
+          var macAsset = match("aarch64-macos");
+          var linx86Asset = match("x86_64-linux");
+          var linarmAsset = match("aarch64-linux");
+
+          el.innerHTML =
+            '<p style="margin-bottom:12px;color:var(--text-muted);font-size:0.9rem">' +
+            'We couldn\'t auto-detect your platform. Pick your system:</p>' +
+            '<div class="download-bar" style="flex-direction:column;align-items:flex-start;gap:8px">' +
+            (macAsset
+              ? '<a class="btn-dl" href="' + macAsset.browser_download_url + '" style="width:auto">' +
+                'Download for macOS (Apple Silicon) &mdash; ' + formatSize(macAsset.size) + '</a>'
+              : '') +
+            (linx86Asset
+              ? '<a class="btn-dl" href="' + linx86Asset.browser_download_url + '" style="width:auto">' +
+                'Download for Linux (x86_64) &mdash; ' + formatSize(linx86Asset.size) + '</a>'
+              : '') +
+            (linarmAsset
+              ? '<a class="btn-dl" href="' + linarmAsset.browser_download_url + '" style="width:auto">' +
+                'Download for Linux (ARM64) &mdash; ' + formatSize(linarmAsset.size) + '</a>'
+              : '') +
+            '</div>';
+          renderInstall(tag, null);
+          return;
+        }
+
+        // Matched — show download button + instructions
+        el.innerHTML =
+          '<div class="download-bar">' +
+          '<a class="btn-dl" href="' + url + '">Download for ' + label + '</a>' +
+          '<div class="meta">' +
+          '<strong>' + tag + '</strong> &middot; ' + size + '<br>' +
+          'Statically linked tarball. No runtime deps.' +
+          '</div>' +
+          '</div>' +
+          '<div class="download-other">' +
+          'Other platforms &mdash;' +
+          (function () {
+            var out = [];
+            var names = ["aarch64-macos", "x86_64-linux", "aarch64-linux"];
+            for (var i = 0; i < names.length; i++) {
+              if (names[i] === suffix) continue;
+              var a = match(names[i]);
+              if (a) out.push('<a href="' + a.browser_download_url + '">' + names[i] + '</a>');
+            }
+            return out.join("") || '<a href="https://github.com/daemonicai/memlite/releases/latest">all releases</a>';
+          })() +
+          '</div>';
+        renderInstall(tag, suffix);
+      })
+      .catch(function () {
+        el.innerHTML =
+          '<p style="color:var(--text-muted);font-size:0.9rem">' +
+          'Could not reach GitHub. See <a href="https://github.com/daemonicai/memlite/releases/latest">releases</a> for downloads.' +
+          '</p>';
+      });
+
+    function renderInstall(tag, s) {
+      var dir = s ? "memlite-" + tag + "-" + s : "memlite-" + tag + "-PLATFORM";
+      var inst = document.getElementById("install-block");
+      if (!inst) {
+        // Create install block after download section
+        var block = document.createElement("div");
+        block.id = "install-block";
+        block.className = "code-block";
+        block.style.marginTop = "20px";
+        block.innerHTML =
+          '<pre><span class="cmt"># Extract and install</span>\n' +
+          '<span class="cmd">tar</span> <span class="opt">-xzf</span> <span class="str">' + dir + '.tar.gz</span>\n' +
+          '<span class="cmd">install</span> <span class="opt">-m 0755</span> ' + dir + '/memlite <span class="str">~/.local/bin/memlite</span>\n\n' +
+          '<span class="cmt"># Initialize (downloads ~99 MB embedding model, creates database)</span>\n' +
+          '<span class="cmd">memlite</span> init</pre>';
+        el.parentNode.insertBefore(block, el.nextSibling);
+      }
+    }
+
+    function formatSize(bytes) {
+      var mb = bytes / (1024 * 1024);
+      return mb >= 1 ? mb.toFixed(1) + " MB" : (bytes / 1024).toFixed(0) + " KB";
+    }
+  })();
+  </script>
 
 </body>
 </html>
